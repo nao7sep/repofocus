@@ -113,6 +113,10 @@ describe('classifyRepository', () => {
     expect(result.reasons).toEqual([{ kind: 'error', detail: 'Git state unavailable.' }]);
   });
 
+  it('keeps an always-show repository visible without Git work', () => {
+    expect(reasonKinds(cleanInput({ alwaysShow: true }))).toEqual(['always-show']);
+  });
+
   it('keeps unknown branch state visible', () => {
     expect(reasonKinds(cleanInput({ branch: { kind: 'unknown', detail: 'HEAD is inconsistent.' } })))
       .toEqual(['error']);

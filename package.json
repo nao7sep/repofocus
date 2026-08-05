@@ -6,6 +6,7 @@
   "publisher": "nao7sep",
   "license": "MIT",
   "preview": true,
+  "icon": "icon.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/nao7sep/repofocus.git"
@@ -24,13 +25,14 @@
     "git",
     "source-control",
     "multi-repo",
-    "repository"
+    "repository",
+    "vscode-extension"
   ],
   "extensionKind": [
     "workspace"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onView:workbench.scm"
   ],
   "main": "./dist/extension.js",
   "extensionDependencies": [
@@ -61,6 +63,11 @@
       {
         "command": "repofocus.showAll",
         "title": "Show All Repositories",
+        "category": "RepoFocus"
+      },
+      {
+        "command": "repofocus.copyDiagnostics",
+        "title": "Copy Diagnostics",
         "category": "RepoFocus"
       }
     ],
@@ -98,6 +105,23 @@
           "default": true,
           "scope": "window",
           "description": "Treat repositories with incoming commits as actionable."
+        },
+        "repofocus.fetchIntervalMinutes": {
+          "type": "number",
+          "default": 5,
+          "minimum": 0,
+          "maximum": 1440,
+          "scope": "window",
+          "description": "Minutes between bounded background Git fetches used to detect incoming and outgoing commits. Set to 0 to disable automatic fetching."
+        },
+        "repofocus.alwaysShow": {
+          "type": "array",
+          "default": [],
+          "scope": "window",
+          "items": {
+            "type": "string"
+          },
+          "description": "Workspace-relative Git repository glob patterns that remain visible even when clean."
         }
       }
     }
@@ -113,15 +137,18 @@
     "check": "npm run typecheck && npm run lint && npm test",
     "vscode:prepublish": "npm run check && npm run build"
   },
+  "dependencies": {
+    "minimatch": "10.2.6"
+  },
   "devDependencies": {
-    "@eslint/js": "9.39.2",
-    "@types/node": "22.20.1",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.1.2",
     "@types/vscode": "1.125.0",
     "@vitest/coverage-v8": "4.1.10",
     "@vscode/test-electron": "3.1.0",
     "@vscode/vsce": "3.9.2",
     "esbuild": "0.28.1",
-    "eslint": "9.39.2",
+    "eslint": "^10.8.0",
     "typescript": "5.9.3",
     "typescript-eslint": "8.66.0",
     "vitest": "4.1.10"

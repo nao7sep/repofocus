@@ -17,6 +17,7 @@ export interface RepositoryActionabilityInput {
   readonly rebaseInProgress: boolean;
   readonly remoteCount: number;
   readonly branch: BranchState;
+  readonly alwaysShow?: boolean;
   readonly evaluationError?: string;
 }
 
@@ -29,6 +30,7 @@ export type ActionabilityReason =
   | { readonly kind: 'incoming'; readonly count: number }
   | { readonly kind: 'outgoing'; readonly count: number }
   | { readonly kind: 'unpublished' }
+  | { readonly kind: 'always-show' }
   | { readonly kind: 'error'; readonly detail: string };
 
 export interface RepositoryActionability {
@@ -79,6 +81,7 @@ export function classifyRepository(
     reasons.push({ kind: 'untracked', count: input.untrackedChanges });
   }
   if (input.rebaseInProgress) reasons.push({ kind: 'rebase' });
+  if (input.alwaysShow) reasons.push({ kind: 'always-show' });
 
   if (input.branch.kind === 'named') {
     if (input.branch.upstream === 'configured') {

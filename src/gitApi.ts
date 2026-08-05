@@ -57,6 +57,7 @@ export interface GitRepository {
   readonly rootUri: UriLike;
   readonly state: GitRepositoryState;
   readonly ui: GitRepositoryUiState;
+  fetch(): Promise<void>;
   status(): Promise<void>;
 }
 

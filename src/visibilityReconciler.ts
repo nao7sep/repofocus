@@ -38,6 +38,10 @@ export class VisibilityReconciler {
     return this.filteringEnabled;
   }
 
+  get hiddenRepositoryCount(): number {
+    return this.hiddenByRepoFocus.size;
+  }
+
   setFilteringEnabled(enabled: boolean): Promise<void> {
     if (this.filteringEnabled === enabled) return this.queue;
     this.filteringEnabled = enabled;

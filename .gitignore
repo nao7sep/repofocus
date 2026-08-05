@@ -1,6 +1,12 @@
+# Dependencies
+node_modules/
+
+# Generated build and test output
 coverage/
 dist/
 dist-tests/
-node_modules/
 .vscode-test/
+
+# Local packages and operating-system metadata
 *.vsix
+.DS_Store

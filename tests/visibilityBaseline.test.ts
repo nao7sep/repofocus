@@ -30,6 +30,7 @@ class VisibilityFixture {
         get selected() { return false; },
         onDidChange: event,
       },
+      fetch: async () => {},
       status: async () => {},
     }));
     for (const repository of this.repositories) {
