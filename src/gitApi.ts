@@ -48,9 +48,15 @@ export interface GitRepositoryState {
   readonly onDidChange: EventLike<void>;
 }
 
+export interface GitRepositoryUiState {
+  readonly selected: boolean;
+  readonly onDidChange: EventLike<void>;
+}
+
 export interface GitRepository {
   readonly rootUri: UriLike;
   readonly state: GitRepositoryState;
+  readonly ui: GitRepositoryUiState;
   status(): Promise<void>;
 }
 

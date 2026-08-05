@@ -57,6 +57,12 @@ export class VisibilityReconciler {
     this.requestReconcile();
   }
 
+  adoptAllVisible(mappings: readonly VisibilityMapping[]): void {
+    if (this.state !== 'active') return;
+    this.hiddenByRepoFocus.clear();
+    this.replaceMappings(mappings);
+  }
+
   setActionability(repository: RepositoryIdentity, value: RepositoryActionability): void {
     if (this.state !== 'active') return;
     this.actionability.set(repositoryKey(repository), value);

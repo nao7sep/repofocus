@@ -8,6 +8,7 @@ import type { GitApi, GitExtension, GitRepository } from './gitApi';
 import { GitRepositoryMonitor } from './gitRepositoryMonitor';
 import { Logger } from './logger';
 import { toActionabilityInput } from './repositoryStateAdapter';
+import { establishAllVisibleBaseline } from './visibilityBaseline';
 import {
   resolveVisibilityCommands,
   type VisibilityMapping,
@@ -51,6 +52,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
   let policy = readPolicy();
   let mappingRefresh = Promise.resolve();
   let mappingRefreshGeneration = 0;
+  let baselineEstablished = false;
   let stopping = false;
 
   const resolveVisibilityMappings = async (): Promise<readonly VisibilityMapping[]> => {
@@ -74,8 +76,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
       });
     },
   });
-  const filteringEnabled = context.workspaceState.get(filteringStateKey, true);
-  await reconciler.setFilteringEnabled(filteringEnabled);
+  let filteringEnabled = context.workspaceState.get(filteringStateKey, true);
+  await reconciler.setFilteringEnabled(false);
   await vscode.commands.executeCommand('setContext', 'repofocus.compatible', true);
   await vscode.commands.executeCommand('setContext', 'repofocus.filteringEnabled', filteringEnabled);
   await vscode.commands.executeCommand('setContext', 'repofocus.hasError', false);
@@ -84,7 +86,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
     let lastError: unknown;
     for (let attempt = 0; attempt < 10; attempt += 1) {
       try {
-        reconciler.replaceMappings(await resolveVisibilityMappings());
+        const mappings = await resolveVisibilityMappings();
+        if (filteringEnabled && !baselineEstablished && git.repositories.length > 0) {
+          await reconciler.setFilteringEnabled(false);
+          await establishAllVisibleBaseline(
+            git.repositories,
+            mappings,
+            async command => {
+              await vscode.commands.executeCommand(command);
+            },
+          );
+          reconciler.adoptAllVisible(mappings);
+          baselineEstablished = true;
+          await reconciler.setFilteringEnabled(true);
+        } else {
+          reconciler.replaceMappings(mappings);
+          await reconciler.setFilteringEnabled(filteringEnabled);
+        }
         return;
       } catch (error) {
         lastError = error;
@@ -151,9 +169,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
   };
 
   const setFilteringEnabled = async (enabled: boolean): Promise<void> => {
+    filteringEnabled = enabled;
     await context.workspaceState.update(filteringStateKey, enabled);
     await vscode.commands.executeCommand('setContext', 'repofocus.filteringEnabled', enabled);
-    await reconciler.setFilteringEnabled(enabled);
+    if (enabled && !baselineEstablished) {
+      scheduleMappingRefresh();
+      await waitForSettled();
+    } else {
+      await reconciler.setFilteringEnabled(enabled);
+    }
     logger.info('Filtering state changed.', { enabled });
   };
 
