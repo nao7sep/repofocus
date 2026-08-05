@@ -61,10 +61,25 @@ export class VisibilityReconciler {
     this.requestReconcile();
   }
 
-  adoptAllVisible(mappings: readonly VisibilityMapping[]): void {
+  adoptVisibility(
+    mappings: readonly VisibilityMapping[],
+    hiddenRepositories: readonly RepositoryIdentity[],
+  ): void {
     if (this.state !== 'active') return;
     this.hiddenByRepoFocus.clear();
+    for (const repository of hiddenRepositories) {
+      this.hiddenByRepoFocus.add(repositoryKey(repository));
+    }
     this.replaceMappings(mappings);
+  }
+
+  async resetForAllVisibleBaseline(): Promise<void> {
+    if (this.state !== 'active') return;
+    this.filteringEnabled = false;
+    this.requested = false;
+    await this.queue;
+    this.hiddenByRepoFocus.clear();
+    this.mappings.clear();
   }
 
   setActionability(repository: RepositoryIdentity, value: RepositoryActionability): void {

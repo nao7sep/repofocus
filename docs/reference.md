@@ -25,7 +25,9 @@ A detached HEAD, unborn branch, or local-only branch is not remote work by itsel
 
 `repofocus.alwaysShow` accepts workspace-relative Git repository glob patterns. For a workspace opened at a parent directory, `company`, `clients/*`, and `experiments/**` are representative patterns. Matching is case-sensitive except on Windows.
 
-VS Code's native `scm.repositories.visible` setting must be at least the number of monitored repositories, including clean ones. RepoFocus needs a known all-visible baseline to distinguish its own visibility changes from pre-existing native state.
+VS Code's native `scm.repositories.visible` setting must be at least the number of monitored repositories, including clean ones. RepoFocus contributes a default of 100; an explicit user or workspace value still takes precedence. RepoFocus needs a known all-visible baseline to distinguish its own visibility changes from pre-existing native state.
+
+RepoFocus also requires VS Code's `multiple` repository-selection mode. During initialization it uses VS Code's native selection-mode commands to switch through `single` and back to `multiple`, verifies native repository mappings, and reconciles directly from the resulting known visibility state without an intermediate restore-to-all cycle.
 
 ## Commands
 

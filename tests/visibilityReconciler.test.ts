@@ -64,6 +64,24 @@ describe('VisibilityReconciler', () => {
     expect(toggle).toHaveBeenCalledTimes(1);
   });
 
+  it('reconciles directly from a verified partially hidden state', async () => {
+    const alpha = repository('alpha');
+    const beta = repository('beta');
+    const toggle = vi.fn(async () => {});
+    const reconciler = new VisibilityReconciler({ toggle });
+    reconciler.adoptVisibility(
+      [mapping(alpha, 'toggle.alpha'), mapping(beta, 'toggle.beta')],
+      [alpha],
+    );
+    reconciler.setActionability(alpha, changed);
+    reconciler.setActionability(beta, clean);
+    await reconciler.waitForIdle();
+
+    expect(toggle.mock.calls).toEqual([['toggle.alpha'], ['toggle.beta']]);
+    expect(reconciler.isHiddenByRepoFocus(alpha)).toBe(false);
+    expect(reconciler.isHiddenByRepoFocus(beta)).toBe(true);
+  });
+
   it('reconciles a state update that arrives during an in-flight toggle', async () => {
     const alpha = repository('alpha');
     let releaseFirstToggle: (() => void) | undefined;

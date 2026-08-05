@@ -47,13 +47,21 @@ export async function run(): Promise<void> {
     ...Array.from({ length: expectedRepositoryCount - 2 }, (_, index) =>
       join(fixtureRoot, `repo-${String(index + 3).padStart(2, '0')}`)),
   ];
-  for (const repositoryPath of repositoryPaths) await openRepository(repositoryPath);
+  const discoveryOrder = repositoryPaths.filter((_, index) => index % 2 === 0)
+    .concat(repositoryPaths.filter((_, index) => index % 2 === 1).reverse());
+  for (const repositoryPath of discoveryOrder) {
+    await openRepository(repositoryPath);
+    await new Promise(resolve => setTimeout(resolve, 125));
+  }
   await vscode.commands.executeCommand('workbench.view.scm');
 
   const extension = vscode.extensions.getExtension<RepoFocusExtensionApi>(extensionId);
   assert(extension, `Extension ${extensionId} was not loaded.`);
   const initialSettleStarted = Date.now();
-  const api = await extension.activate();
+  const api = await waitFor(
+    'automatic RepoFocus activation',
+    () => extension.isActive ? extension.exports : undefined,
+  );
 
   await waitFor('all Git repositories', () =>
     repositoryPaths.every(path => repositoryAt(api, path))

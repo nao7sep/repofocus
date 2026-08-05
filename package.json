@@ -32,7 +32,7 @@
     "workspace"
   ],
   "activationEvents": [
-    "onView:workbench.scm"
+    "onStartupFinished"
   ],
   "main": "./dist/extension.js",
   "extensionDependencies": [
@@ -47,6 +47,10 @@
     }
   },
   "contributes": {
+    "configurationDefaults": {
+      "scm.repositories.visible": 100,
+      "scm.repositories.selectionMode": "multiple"
+    },
     "commands": [
       {
         "command": "repofocus.toggle",

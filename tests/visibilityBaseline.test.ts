@@ -1,86 +1,90 @@
 import { describe, expect, it } from 'vitest';
-import type { EventLike, GitRepository, GitRepositoryState } from '../src/gitApi';
+import type { GitRepository } from '../src/gitApi';
 import { establishAllVisibleBaseline } from '../src/visibilityBaseline';
-import type { VisibilityMapping } from '../src/visibilityCommandResolver';
 
-class VisibilityFixture {
-  readonly repositories: GitRepository[];
-  readonly mappings: VisibilityMapping[];
-  readonly visible = new Set<string>();
-  private selected: string | undefined;
-
-  constructor(names: readonly string[], initiallyVisible: readonly string[]) {
-    for (const name of initiallyVisible) this.visible.add(name);
-    this.selected = initiallyVisible[0];
-    const event: EventLike<void> = () => ({ dispose() {} });
-    const state = {
-      HEAD: undefined,
-      remotes: [],
-      rebaseCommit: undefined,
-      mergeChanges: [],
-      indexChanges: [],
-      workingTreeChanges: [],
-      untrackedChanges: [],
-      onDidChange: event,
-    } satisfies GitRepositoryState;
-    this.repositories = names.map(name => ({
-      rootUri: { fsPath: `/${name}`, toString: () => `file:///${name}` },
-      state,
-      ui: {
-        get selected() { return false; },
-        onDidChange: event,
-      },
-      fetch: async () => {},
-      status: async () => {},
-    }));
-    for (const repository of this.repositories) {
-      const name = repository.rootUri.fsPath.slice(1);
-      Object.defineProperty(repository.ui, 'selected', { get: () => this.selected === name });
-    }
-    this.mappings = this.repositories.map(repository => ({
-      repository,
-      command: `toggle.${repository.rootUri.fsPath.slice(1)}`,
-    }));
-  }
-
-  readonly toggle = (command: string): Promise<void> => {
-    const name = command.slice('toggle.'.length);
-    if (this.visible.has(name)) {
-      this.visible.delete(name);
-      if (this.selected === name) {
-        const next = this.repositories
-          .map(repository => repository.rootUri.fsPath.slice(1))
-          .find(candidate => this.visible.has(candidate));
-        if (next) this.selected = next;
-        // VS Code leaves SourceControl.selected stale when the final visible
-        // repository is hidden, so retain the old value when there is no next one.
-      }
-    } else {
-      this.visible.add(name);
-    }
-    return Promise.resolve();
-  };
+function repository(name: string, selected: () => boolean): GitRepository {
+  return {
+    rootUri: { fsPath: `/${name}`, toString: () => `file:///${name}` },
+    ui: { get selected() { return selected(); }, onDidChange: () => ({ dispose() {} }) },
+  } as unknown as GitRepository;
 }
 
 describe('establishAllVisibleBaseline', () => {
-  it.each([
-    ['all visible', ['alpha', 'beta', 'gamma']],
-    ['some visible', ['beta']],
-    ['none visible', []],
-  ])('normalizes %s repositories to all visible', async (_name, initiallyVisible) => {
-    const fixture = new VisibilityFixture(['alpha', 'beta', 'gamma'], initiallyVisible);
-    await establishAllVisibleBaseline(fixture.repositories, fixture.mappings, fixture.toggle, 1);
-    expect([...fixture.visible].sort()).toEqual(['alpha', 'beta', 'gamma']);
+  it('discovers command identity from reversible focus changes', async () => {
+    const names = ['alpha', 'beta', 'gamma'];
+    let selectedName = 'beta';
+    const visible = new Set(names);
+    const repositories = names.map(name => repository(name, () => selectedName === name));
+    const targets = new Map([
+      ['toggle.scm0', 'gamma'],
+      ['toggle.scm1', 'alpha'],
+      ['toggle.scm2', 'beta'],
+    ]);
+    const commands = [...targets.keys()];
+    const baseline = await establishAllVisibleBaseline(
+      repositories,
+      commands.map((command, index) => ({ repository: repositories[index], command })),
+      command => {
+        if (command.endsWith('.single')) {
+          const first = names.find(name => visible.has(name)) ?? names[0];
+          visible.clear();
+          visible.add(first);
+          selectedName = first;
+        } else if (command.endsWith('.multiple')) {
+          for (const name of names) visible.add(name);
+        } else if (targets.has(command)) {
+          const target = targets.get(command)!;
+          if (visible.delete(target)) {
+            if (selectedName === target) selectedName = names.find(name => visible.has(name)) ?? target;
+          } else {
+            visible.add(target);
+          }
+        }
+        return Promise.resolve();
+      },
+      1,
+      1,
+    );
+
+    expect(baseline.mappings.map(mapping => [mapping.repository.rootUri.toString(), mapping.command])).toEqual([
+      ['file:///alpha', 'toggle.scm1'],
+      ['file:///beta', 'toggle.scm2'],
+      ['file:///gamma', 'toggle.scm0'],
+    ]);
+    expect(baseline.hiddenRepositories.map(item => item.rootUri.toString())).toEqual([
+      'file:///alpha',
+      'file:///beta',
+    ]);
+    expect([...visible]).toEqual(['gamma']);
   });
 
-  it('rejects an incomplete mapping before changing visibility', async () => {
-    const fixture = new VisibilityFixture(['alpha', 'beta'], ['alpha', 'beta']);
+  it('rejects when no command changes the focused repository', async () => {
+    const repositories = [
+      repository('alpha', () => true),
+      repository('beta', () => false),
+    ];
     await expect(establishAllVisibleBaseline(
-      fixture.repositories,
-      fixture.mappings.slice(0, 1),
-      fixture.toggle,
+      repositories,
+      ['toggle.scm0', 'toggle.scm1'].map((command, index) => ({
+        repository: repositories[index],
+        command,
+      })),
+      () => Promise.resolve(),
       1,
-    )).rejects.toThrow('Every Git repository');
-    expect([...fixture.visible].sort()).toEqual(['alpha', 'beta']);
+      1,
+    )).rejects.toThrow('No native visibility command matched');
+  });
+
+  it('wraps a native command failure', async () => {
+    const alpha = repository('alpha', () => true);
+    await expect(establishAllVisibleBaseline(
+      [alpha],
+      [{ repository: alpha, command: 'toggle.scm0' }],
+      command => command.endsWith('.single')
+        ? Promise.reject(new Error('unsupported'))
+        : Promise.resolve(),
+      1,
+      1,
+    )).rejects.toThrow('Failed to map and select every repository');
   });
 });

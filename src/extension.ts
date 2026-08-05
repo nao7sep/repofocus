@@ -21,6 +21,7 @@ import { VisibilityReconciler } from './visibilityReconciler';
 
 const gitExtensionId = 'vscode.git';
 const filteringStateKey = 'repofocus.filteringEnabledByWorkspace';
+const repositoryTopologySettleMilliseconds = 1_000;
 
 export interface RepoFocusExtensionApi {
   readonly git: GitApi;
@@ -71,6 +72,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
     return resolveVisibilityCommands(git.repositories, commands);
   };
 
+  const resolveSettledVisibilityMappings = async (
+    generation: number,
+  ): Promise<readonly VisibilityMapping[]> => {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (generation !== mappingRefreshGeneration || stopping) return [];
+      try {
+        return await resolveVisibilityMappings();
+      } catch (error) {
+        lastError = error;
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+    }
+    throw lastError instanceof Error
+      ? lastError
+      : new Error('Native visibility mapping failed.');
+  };
+
   const reconciler = new VisibilityReconciler({
     toggle: async command => {
       await vscode.commands.executeCommand(command);
@@ -115,25 +134,42 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
       await reconciler.failCompatibility(new Error(visibleLimitIssue));
       return;
     }
+    if (git.repositories.length > 0) {
+      await vscode.commands.executeCommand('workbench.view.scm');
+      await new Promise(resolve => setTimeout(resolve, 250));
+      await vscode.commands.executeCommand('workbench.scm.focus');
+    }
     let lastError: unknown;
     for (let attempt = 0; attempt < 10; attempt += 1) {
       if (generation !== mappingRefreshGeneration || stopping) return;
       try {
-        const mappings = await resolveVisibilityMappings();
-        if (filteringEnabled && !baselineEstablished && git.repositories.length > 0) {
-          await reconciler.setFilteringEnabled(false);
-          await establishAllVisibleBaseline(
+        if (git.repositories.length > 0) {
+          await reconciler.resetForAllVisibleBaseline();
+          if (generation !== mappingRefreshGeneration || stopping) return;
+          const candidateMappings = await resolveSettledVisibilityMappings(generation);
+          if (generation !== mappingRefreshGeneration || stopping) return;
+          const baseline = await establishAllVisibleBaseline(
             git.repositories,
-            mappings,
+            candidateMappings,
             async command => {
               await vscode.commands.executeCommand(command);
             },
           );
-          reconciler.adoptAllVisible(mappings);
+          if (generation !== mappingRefreshGeneration || stopping) return;
+          reconciler.adoptVisibility(baseline.mappings, baseline.hiddenRepositories);
           baselineEstablished = true;
-          await reconciler.setFilteringEnabled(true);
+          await reconciler.setFilteringEnabled(filteringEnabled);
+          logger.info('Visibility filtering initialized.', {
+            repositoryCount: baseline.mappings.length,
+            actionableRepositoryCount: [...actionability.values()]
+              .filter(value => value.actionable).length,
+            hiddenRepositoryCount: reconciler.hiddenRepositoryCount,
+            generation,
+          });
         } else {
-          reconciler.replaceMappings(mappings);
+          const candidateMappings = await resolveSettledVisibilityMappings(generation);
+          if (generation !== mappingRefreshGeneration || stopping) return;
+          reconciler.replaceMappings(candidateMappings);
           await reconciler.setFilteringEnabled(filteringEnabled);
         }
         return;
@@ -148,10 +184,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
 
   const scheduleMappingRefresh = (): void => {
     const generation = ++mappingRefreshGeneration;
-    mappingRefresh = mappingRefresh.then(async () => {
-      await new Promise(resolve => setTimeout(resolve, 50));
+    mappingRefresh = (async () => {
+      await new Promise(resolve => setTimeout(resolve, repositoryTopologySettleMilliseconds));
       if (!stopping && generation === mappingRefreshGeneration) await refreshMappings(generation);
-    });
+    })();
   };
 
   const evaluateRepository = (repository: GitRepository): void => {
@@ -281,7 +317,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
       alwaysShowPatterns = readAlwaysShowPatterns();
       await fetchScheduler.refreshNow();
       evaluateAll();
-      scheduleMappingRefresh();
       await waitForSettled();
     }),
     vscode.commands.registerCommand('repofocus.showAll', async () => {
