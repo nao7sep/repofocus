@@ -1,5 +1,5 @@
 import type { BranchState, RepositoryActionabilityInput } from './actionability';
-import type { GitBranch, GitRepositoryState } from './gitApi';
+import { gitStatus, type GitBranch, type GitRepositoryState } from './gitApi';
 
 function branchState(head: GitBranch | undefined): BranchState {
   if (!head) return { kind: 'unborn' };
@@ -18,11 +18,12 @@ function branchState(head: GitBranch | undefined): BranchState {
 }
 
 export function toActionabilityInput(state: GitRepositoryState): RepositoryActionabilityInput {
+  const mixedUntrackedChanges = state.workingTreeChanges.filter(change => change.status === gitStatus.untracked);
   return {
     mergeChanges: state.mergeChanges.length,
     stagedChanges: state.indexChanges.length,
-    unstagedChanges: state.workingTreeChanges.length,
-    untrackedChanges: state.untrackedChanges.length,
+    unstagedChanges: state.workingTreeChanges.length - mixedUntrackedChanges.length,
+    untrackedChanges: state.untrackedChanges.length + mixedUntrackedChanges.length,
     rebaseInProgress: state.rebaseCommit !== undefined,
     remoteCount: state.remotes.length,
     branch: branchState(state.HEAD),

@@ -1,6 +1,7 @@
 import type { DisposableLike, GitApi, GitRepository } from './gitApi';
 
 export interface GitRepositoryMonitorCallbacks {
+  readonly onRepositoryOpened?: (repository: GitRepository) => void;
   readonly onRepositoryChanged: (repository: GitRepository) => void;
   readonly onRepositoryClosed?: (repository: GitRepository) => void;
 }
@@ -41,6 +42,7 @@ export class GitRepositoryMonitor implements DisposableLike {
       }
     });
     this.repositorySubscriptions.set(repository, subscription);
+    this.callbacks.onRepositoryOpened?.(repository);
     this.callbacks.onRepositoryChanged(repository);
   }
 

@@ -50,4 +50,13 @@ describe('toActionabilityInput', () => {
   it('treats an absent HEAD as unborn', () => {
     expect(toActionabilityInput(state({ HEAD: undefined })).branch).toEqual({ kind: 'unborn' });
   });
+
+  it('separates untracked files from unstaged changes in VS Code mixed mode', () => {
+    const modified = { status: 5 } as never;
+    const untracked = { status: 7 } as never;
+    const input = toActionabilityInput(state({ workingTreeChanges: [modified, untracked] }));
+
+    expect(input.unstagedChanges).toBe(1);
+    expect(input.untrackedChanges).toBe(1);
+  });
 });

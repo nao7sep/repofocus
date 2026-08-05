@@ -1,5 +1,5 @@
 import { strict as assert } from 'node:assert';
-import { appendFile } from 'node:fs/promises';
+import { appendFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import * as vscode from 'vscode';
 import type { GitRepository } from '../../src/gitApi';
@@ -48,20 +48,14 @@ export async function run(): Promise<void> {
     repositoryAt(api, alphaPath) && repositoryAt(api, betaPath) ? true : undefined,
   );
   await vscode.commands.executeCommand('workbench.view.scm');
-
-  const mappings = await api.resolveVisibilityMappings();
-  assert.equal(mappings.length, 2);
   const alpha = repositoryAt(api, alphaPath);
   const beta = repositoryAt(api, betaPath);
   assert(alpha && beta);
-
-  const alphaMapping = mappings.find(mapping => mapping.repository.rootUri.toString() === alpha.rootUri.toString());
-  const betaMapping = mappings.find(mapping => mapping.repository.rootUri.toString() === beta.rootUri.toString());
-  assert(alphaMapping && betaMapping);
-
+  await api.waitForSettled();
   const before = api.git.repositories.length;
-  await api.toggle(alphaMapping);
-  assert.equal(api.git.repositories.length, before, 'Hiding must not remove the repository from the Git API.');
+  assert(api.isHiddenByRepoFocus(alpha), 'A clean repository must be hidden automatically.');
+  assert(api.isHiddenByRepoFocus(beta), 'The last clean repository must also be hidden automatically.');
+  assert.equal(api.git.repositories.length, before, 'Hiding must not remove repositories from the Git API.');
 
   const stateChanged = new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(() => {
@@ -79,21 +73,51 @@ export async function run(): Promise<void> {
 
   await appendFile(join(alphaPath, 'tracked.txt'), 'changed while hidden\n', 'utf8');
   await stateChanged;
+  await api.waitForSettled();
   assert.equal(api.git.repositories.length, before);
   assert.deepEqual(
     api.getActionability(alpha)?.reasons.map(reason => reason.kind),
     ['unstaged'],
     'A hidden edit must flow into RepoFocus actionability.',
   );
+  assert.equal(api.isHiddenByRepoFocus(alpha), false, 'An actionable repository must be shown again.');
+  assert.equal(api.isHiddenByRepoFocus(beta), true, 'The remaining clean repository must stay hidden.');
 
-  await api.toggle(betaMapping);
-  assert.equal(api.git.repositories.length, before, 'The last visible repository must remain monitored.');
+  await vscode.commands.executeCommand('repofocus.showAll');
+  await api.waitForSettled();
+  assert.equal(api.isHiddenByRepoFocus(alpha), false);
+  assert.equal(api.isHiddenByRepoFocus(beta), false, 'Show All Repositories must disable filtering and restore clean repositories.');
+
+  await writeFile(join(betaPath, 'untracked.txt'), 'untracked\n', 'utf8');
+  await beta.status();
+  await waitFor('untracked-file actionability', () =>
+    api.getActionability(beta)?.reasons.some(reason => reason.kind === 'untracked') ? true : undefined,
+  );
+
+  const configuration = vscode.workspace.getConfiguration('repofocus');
+  await configuration.update('includeUntrackedFiles', false, vscode.ConfigurationTarget.Workspace);
+  await vscode.commands.executeCommand('repofocus.toggle');
+  await api.waitForSettled();
+  assert.equal(api.isHiddenByRepoFocus(alpha), false, 'The changed repository must remain visible.');
+  assert.equal(api.isHiddenByRepoFocus(beta), true, 'Excluded untracked files must not make a repository visible.');
+
+  await configuration.update('includeUntrackedFiles', true, vscode.ConfigurationTarget.Workspace);
+  await api.waitForSettled();
+  assert.equal(api.isHiddenByRepoFocus(beta), false, 'Changing policy must immediately reveal the newly actionable repository.');
+
+  await writeFile(join(alphaPath, 'tracked.txt'), 'alpha\n', 'utf8');
+  await alpha.status();
+  await waitFor('clean repository to become hidden again', () =>
+    api.getActionability(alpha)?.actionable === false && api.isHiddenByRepoFocus(alpha) ? true : undefined,
+  );
 
   const visualPauseMilliseconds = Number(process.env.REPOFOCUS_VISUAL_PAUSE_MS ?? '0');
   if (visualPauseMilliseconds > 0) {
     await new Promise(resolve => setTimeout(resolve, visualPauseMilliseconds));
   }
 
-  await api.toggle(betaMapping);
-  await api.toggle(alphaMapping);
+  await vscode.commands.executeCommand('repofocus.showAll');
+  await api.waitForSettled();
+  assert.equal(api.isHiddenByRepoFocus(alpha), false);
+  assert.equal(api.isHiddenByRepoFocus(beta), false);
 }

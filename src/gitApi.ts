@@ -13,7 +13,12 @@ export interface UriLike {
 
 export interface GitChange {
   readonly uri: UriLike;
+  readonly status: number;
 }
+
+export const gitStatus = {
+  untracked: 7,
+} as const;
 
 export interface GitUpstreamRef {
   readonly remote: string;
@@ -46,6 +51,7 @@ export interface GitRepositoryState {
 export interface GitRepository {
   readonly rootUri: UriLike;
   readonly state: GitRepositoryState;
+  status(): Promise<void>;
 }
 
 export interface GitApi {

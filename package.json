@@ -44,6 +44,64 @@
       "supported": false
     }
   },
+  "contributes": {
+    "commands": [
+      {
+        "command": "repofocus.toggle",
+        "title": "Toggle Filtering",
+        "category": "RepoFocus",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "repofocus.refresh",
+        "title": "Refresh",
+        "category": "RepoFocus",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "repofocus.showAll",
+        "title": "Show All Repositories",
+        "category": "RepoFocus"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "repofocus.toggle",
+          "when": "view == workbench.scm && repofocus.compatible",
+          "group": "navigation@100"
+        },
+        {
+          "command": "repofocus.refresh",
+          "when": "view == workbench.scm && repofocus.filteringEnabled && repofocus.compatible",
+          "group": "navigation@101"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "RepoFocus",
+      "properties": {
+        "repofocus.includeUntrackedFiles": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "description": "Treat repositories containing untracked files as actionable."
+        },
+        "repofocus.includeOutgoingCommits": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "description": "Treat repositories with outgoing commits or an unpublished branch as actionable."
+        },
+        "repofocus.includeIncomingCommits": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "description": "Treat repositories with incoming commits as actionable."
+        }
+      }
+    }
+  },
   "scripts": {
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
