@@ -1,26 +1,57 @@
-import type { Event, Extension, Uri } from 'vscode';
+import type { Extension } from 'vscode';
+
+export interface DisposableLike {
+  dispose(): void;
+}
+
+export type EventLike<T> = (listener: (event: T) => unknown) => DisposableLike;
+
+export interface UriLike {
+  readonly fsPath: string;
+  toString(): string;
+}
 
 export interface GitChange {
-  readonly uri: Uri;
+  readonly uri: UriLike;
+}
+
+export interface GitUpstreamRef {
+  readonly remote: string;
+  readonly name: string;
+}
+
+export interface GitBranch {
+  readonly name?: string;
+  readonly commit?: string;
+  readonly upstream?: GitUpstreamRef;
+  readonly ahead?: number;
+  readonly behind?: number;
+}
+
+export interface GitRemote {
+  readonly name: string;
 }
 
 export interface GitRepositoryState {
+  readonly HEAD: GitBranch | undefined;
+  readonly remotes: readonly GitRemote[];
+  readonly rebaseCommit: object | undefined;
   readonly mergeChanges: readonly GitChange[];
   readonly indexChanges: readonly GitChange[];
   readonly workingTreeChanges: readonly GitChange[];
   readonly untrackedChanges: readonly GitChange[];
-  readonly onDidChange: Event<void>;
+  readonly onDidChange: EventLike<void>;
 }
 
 export interface GitRepository {
-  readonly rootUri: Uri;
+  readonly rootUri: UriLike;
   readonly state: GitRepositoryState;
 }
 
 export interface GitApi {
   readonly repositories: readonly GitRepository[];
-  readonly onDidOpenRepository: Event<GitRepository>;
-  readonly onDidCloseRepository: Event<GitRepository>;
+  readonly onDidOpenRepository: EventLike<GitRepository>;
+  readonly onDidCloseRepository: EventLike<GitRepository>;
 }
 
 export interface GitExtensionExports {

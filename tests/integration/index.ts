@@ -80,6 +80,11 @@ export async function run(): Promise<void> {
   await appendFile(join(alphaPath, 'tracked.txt'), 'changed while hidden\n', 'utf8');
   await stateChanged;
   assert.equal(api.git.repositories.length, before);
+  assert.deepEqual(
+    api.getActionability(alpha)?.reasons.map(reason => reason.kind),
+    ['unstaged'],
+    'A hidden edit must flow into RepoFocus actionability.',
+  );
 
   await api.toggle(betaMapping);
   assert.equal(api.git.repositories.length, before, 'The last visible repository must remain monitored.');
