@@ -38,6 +38,7 @@ export async function run(): Promise<void> {
   assert(fixtureRoot, 'REPOFOCUS_INTEGRATION_ROOT must identify the integration workspace.');
   assert(updaterPath, 'REPOFOCUS_INTEGRATION_UPDATER must identify the upstream fixture clone.');
   const expectedRepositoryCount = Number(process.env.REPOFOCUS_INTEGRATION_REPOSITORY_COUNT ?? '2');
+  await vscode.commands.executeCommand('workbench.view.explorer');
 
   const alphaPath = join(fixtureRoot, 'alpha');
   const betaPath = join(fixtureRoot, 'beta');
@@ -53,8 +54,6 @@ export async function run(): Promise<void> {
     await openRepository(repositoryPath);
     await new Promise(resolve => setTimeout(resolve, 125));
   }
-  await vscode.commands.executeCommand('workbench.view.scm');
-
   const extension = vscode.extensions.getExtension<RepoFocusExtensionApi>(extensionId);
   assert(extension, `Extension ${extensionId} was not loaded.`);
   const initialSettleStarted = Date.now();
@@ -71,6 +70,20 @@ export async function run(): Promise<void> {
   const beta = repositoryAt(api, betaPath);
   assert(alpha && beta);
   await api.waitForSettled();
+  await waitFor('initial clean actionability', () =>
+    repositoryPaths.every(path => {
+      const repository = repositoryAt(api, path);
+      return repository && api.getActionability(repository)?.actionable === false;
+    }) ? true : undefined,
+  );
+  for (const path of repositoryPaths) {
+    const repository = repositoryAt(api, path);
+    assert(repository && !api.isHiddenByRepoFocus(repository), 'Explorer startup must not initialize SCM visibility.');
+  }
+
+  // Opening Source Control here represents the user's pane choice. RepoFocus
+  // must not issue this command itself.
+  await vscode.commands.executeCommand('workbench.view.scm');
   try {
     await waitFor('all clean repositories to become hidden', () =>
       repositoryPaths.every(path => {
@@ -83,6 +96,17 @@ export async function run(): Promise<void> {
   } catch (error) {
     await vscode.commands.executeCommand('repofocus.copyDiagnostics');
     const diagnosticState = await vscode.env.clipboard.readText();
+    const commands = await vscode.commands.getCommands(true);
+    const nativeCommandState = {
+      repositoryVisibilityCommandCount: commands.filter(command =>
+        command.startsWith('workbench.scm.action.toggleRepositoryVisibility.')).length,
+      hasMultipleModeCommand: commands.includes(
+        'workbench.scm.action.repositories.setSelectionMode.multiple',
+      ),
+      hasSingleModeCommand: commands.includes(
+        'workbench.scm.action.repositories.setSelectionMode.single',
+      ),
+    };
     const state = repositoryPaths.map(path => {
       const repository = repositoryAt(api, path);
       return {
@@ -92,7 +116,7 @@ export async function run(): Promise<void> {
       };
     });
     throw new Error(
-      `Initial state did not settle: ${JSON.stringify(state)} diagnostics=${diagnosticState}`,
+      `Initial state did not settle: ${JSON.stringify(state)} nativeCommands=${JSON.stringify(nativeCommandState)} diagnostics=${diagnosticState}`,
       { cause: error },
     );
   }
@@ -112,6 +136,25 @@ export async function run(): Promise<void> {
     const repository = repositoryAt(api, path);
     assert(repository && api.isHiddenByRepoFocus(repository), `Clean repository ${path} must be hidden.`);
   }
+  const configuration = vscode.workspace.getConfiguration('repofocus');
+  await configuration.update(
+    'minimumRepositoryCount',
+    expectedRepositoryCount + 1,
+    vscode.ConfigurationTarget.Workspace,
+  );
+  await waitFor('the repository threshold to restore every repository', () =>
+    repositoryPaths.every(path => {
+      const repository = repositoryAt(api, path);
+      return repository && !api.isHiddenByRepoFocus(repository);
+    }) ? true : undefined,
+  );
+  await configuration.update('minimumRepositoryCount', 2, vscode.ConfigurationTarget.Workspace);
+  await waitFor('lowering the repository threshold to resume filtering', () =>
+    repositoryPaths.every(path => {
+      const repository = repositoryAt(api, path);
+      return repository && api.isHiddenByRepoFocus(repository);
+    }) ? true : undefined,
+  );
   assert.equal(api.git.repositories.length, before, 'Hiding must not remove repositories from the Git API.');
   await vscode.commands.executeCommand('repofocus.copyDiagnostics');
   const diagnostics = JSON.parse(await vscode.env.clipboard.readText()) as { repositoryCount?: number };
@@ -192,7 +235,6 @@ export async function run(): Promise<void> {
     api.getActionability(beta)?.reasons.some(reason => reason.kind === 'untracked') ? true : undefined,
   );
 
-  const configuration = vscode.workspace.getConfiguration('repofocus');
   await configuration.update('includeUntrackedFiles', false, vscode.ConfigurationTarget.Workspace);
   await vscode.commands.executeCommand('repofocus.toggle');
   await api.waitForSettled();

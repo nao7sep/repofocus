@@ -126,6 +126,14 @@
             "type": "string"
           },
           "description": "Workspace-relative Git repository glob patterns that remain visible even when clean."
+        },
+        "repofocus.minimumRepositoryCount": {
+          "type": "integer",
+          "default": 2,
+          "minimum": 1,
+          "maximum": 100,
+          "scope": "window",
+          "description": "Minimum number of detected Git repositories required before RepoFocus filters clean repositories."
         }
       }
     }

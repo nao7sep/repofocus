@@ -22,7 +22,8 @@ describe('VisibilityReconciler', () => {
     const alpha = repository('alpha');
     const toggle = vi.fn(async () => {});
     const reconciler = new VisibilityReconciler({ toggle });
-    reconciler.replaceMappings([mapping(alpha, 'toggle.alpha')]);
+    await reconciler.setFilteringEnabled(true);
+    reconciler.replaceKnownVisibility([mapping(alpha, 'toggle.alpha')], []);
     reconciler.setActionability(alpha, clean);
     await reconciler.waitForIdle();
 
@@ -40,7 +41,11 @@ describe('VisibilityReconciler', () => {
     const beta = repository('beta');
     const toggle = vi.fn(async () => {});
     const reconciler = new VisibilityReconciler({ toggle });
-    reconciler.replaceMappings([mapping(alpha, 'toggle.alpha'), mapping(beta, 'toggle.beta')]);
+    await reconciler.setFilteringEnabled(true);
+    reconciler.replaceKnownVisibility(
+      [mapping(alpha, 'toggle.alpha'), mapping(beta, 'toggle.beta')],
+      [],
+    );
     reconciler.setActionability(alpha, clean);
     reconciler.setActionability(beta, clean);
     await reconciler.waitForIdle();
@@ -54,7 +59,8 @@ describe('VisibilityReconciler', () => {
     const alpha = repository('alpha');
     const toggle = vi.fn(async () => {});
     const reconciler = new VisibilityReconciler({ toggle });
-    reconciler.replaceMappings([mapping(alpha, 'toggle.alpha')]);
+    await reconciler.setFilteringEnabled(true);
+    reconciler.replaceKnownVisibility([mapping(alpha, 'toggle.alpha')], []);
     reconciler.setActionability(alpha, clean);
     reconciler.setActionability(alpha, clean);
     await reconciler.waitForIdle();
@@ -69,7 +75,8 @@ describe('VisibilityReconciler', () => {
     const beta = repository('beta');
     const toggle = vi.fn(async () => {});
     const reconciler = new VisibilityReconciler({ toggle });
-    reconciler.adoptVisibility(
+    await reconciler.setFilteringEnabled(true);
+    reconciler.replaceKnownVisibility(
       [mapping(alpha, 'toggle.alpha'), mapping(beta, 'toggle.beta')],
       [alpha],
     );
@@ -82,6 +89,31 @@ describe('VisibilityReconciler', () => {
     expect(reconciler.isHiddenByRepoFocus(beta)).toBe(true);
   });
 
+  it('restores a verified partially hidden state when filtering is disabled', async () => {
+    const alpha = repository('alpha');
+    const toggle = vi.fn(async () => {});
+    const reconciler = new VisibilityReconciler({ toggle });
+
+    reconciler.replaceKnownVisibility([mapping(alpha, 'toggle.alpha')], [alpha]);
+    await reconciler.waitForIdle();
+
+    expect(toggle).toHaveBeenCalledOnce();
+    expect(reconciler.isHiddenByRepoFocus(alpha)).toBe(false);
+  });
+
+  it('shows an adopted hidden repository until its actionability is known', async () => {
+    const alpha = repository('alpha');
+    const toggle = vi.fn(async () => {});
+    const reconciler = new VisibilityReconciler({ toggle });
+    await reconciler.setFilteringEnabled(true);
+
+    reconciler.replaceKnownVisibility([mapping(alpha, 'toggle.alpha')], [alpha]);
+    await reconciler.waitForIdle();
+
+    expect(toggle).toHaveBeenCalledOnce();
+    expect(reconciler.isHiddenByRepoFocus(alpha)).toBe(false);
+  });
+
   it('reconciles a state update that arrives during an in-flight toggle', async () => {
     const alpha = repository('alpha');
     let releaseFirstToggle: (() => void) | undefined;
@@ -90,7 +122,8 @@ describe('VisibilityReconciler', () => {
       .mockImplementationOnce(() => firstToggle)
       .mockResolvedValue(undefined);
     const reconciler = new VisibilityReconciler({ toggle });
-    reconciler.replaceMappings([mapping(alpha, 'toggle.alpha')]);
+    await reconciler.setFilteringEnabled(true);
+    reconciler.replaceKnownVisibility([mapping(alpha, 'toggle.alpha')], []);
     reconciler.setActionability(alpha, clean);
     await vi.waitFor(() => expect(toggle).toHaveBeenCalledTimes(1));
 
@@ -107,7 +140,11 @@ describe('VisibilityReconciler', () => {
     const beta = repository('beta');
     const toggle = vi.fn(async () => {});
     const reconciler = new VisibilityReconciler({ toggle });
-    reconciler.replaceMappings([mapping(alpha, 'toggle.alpha'), mapping(beta, 'toggle.beta')]);
+    await reconciler.setFilteringEnabled(true);
+    reconciler.replaceKnownVisibility(
+      [mapping(alpha, 'toggle.alpha'), mapping(beta, 'toggle.beta')],
+      [],
+    );
     reconciler.setActionability(alpha, clean);
     reconciler.setActionability(beta, clean);
     await reconciler.waitForIdle();
@@ -135,7 +172,11 @@ describe('VisibilityReconciler', () => {
       .mockRejectedValueOnce(failure)
       .mockResolvedValue(undefined);
     const reconciler = new VisibilityReconciler({ toggle, onError });
-    reconciler.replaceMappings([mapping(alpha, 'toggle.alpha'), mapping(beta, 'toggle.beta')]);
+    await reconciler.setFilteringEnabled(true);
+    reconciler.replaceKnownVisibility(
+      [mapping(alpha, 'toggle.alpha'), mapping(beta, 'toggle.beta')],
+      [],
+    );
     reconciler.setActionability(alpha, clean);
     reconciler.setActionability(beta, clean);
     await reconciler.waitForIdle();
@@ -155,7 +196,8 @@ describe('VisibilityReconciler', () => {
     const alpha = repository('alpha');
     const toggle = vi.fn(async () => {});
     const reconciler = new VisibilityReconciler({ toggle });
-    reconciler.replaceMappings([mapping(alpha, 'toggle.alpha')]);
+    await reconciler.setFilteringEnabled(true);
+    reconciler.replaceKnownVisibility([mapping(alpha, 'toggle.alpha')], []);
     reconciler.setActionability(alpha, clean);
     await reconciler.waitForIdle();
 
@@ -172,7 +214,8 @@ describe('VisibilityReconciler', () => {
     const alpha = repository('alpha');
     const toggle = vi.fn(async () => {});
     const reconciler = new VisibilityReconciler({ toggle });
-    reconciler.replaceMappings([mapping(alpha, 'toggle.alpha')]);
+    await reconciler.setFilteringEnabled(true);
+    reconciler.replaceKnownVisibility([mapping(alpha, 'toggle.alpha')], []);
     reconciler.setActionability(alpha, clean);
     await reconciler.waitForIdle();
 
@@ -196,17 +239,19 @@ describe('VisibilityReconciler', () => {
     const toggle = vi.fn()
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(recoveryFailure)
+      .mockRejectedValueOnce(recoveryFailure)
       .mockResolvedValueOnce(undefined);
     const reconciler = new VisibilityReconciler({ toggle, onError });
-    reconciler.replaceMappings([mapping(alpha, 'toggle.alpha')]);
+    await reconciler.setFilteringEnabled(true);
+    reconciler.replaceKnownVisibility([mapping(alpha, 'toggle.alpha')], []);
     reconciler.setActionability(alpha, clean);
     await reconciler.waitForIdle();
 
-    await reconciler.showAll();
-    expect(onError).toHaveBeenCalledOnce();
+    await reconciler.setFilteringEnabled(false);
+    expect(onError).toHaveBeenCalledTimes(2);
     expect(reconciler.isHiddenByRepoFocus(alpha)).toBe(true);
 
-    await reconciler.showAll();
+    await reconciler.setFilteringEnabled(false);
     expect(reconciler.isHiddenByRepoFocus(alpha)).toBe(false);
   });
 });

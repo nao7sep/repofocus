@@ -8,6 +8,7 @@ describe('createDiagnostics', () => {
       vscodeVersion: '1.131.0',
       platform: 'darwin-arm64',
       filteringEnabled: true,
+      filteringActive: true,
       compatible: true,
       baselineEstablished: true,
       repositoryStates: [
@@ -24,6 +25,7 @@ describe('createDiagnostics', () => {
       },
       alwaysShowPatternCount: 2,
       fetchIntervalMinutes: 5,
+      minimumRepositoryCount: 2,
     });
     const parsed = JSON.parse(diagnostics) as Record<string, unknown>;
 

@@ -16,6 +16,10 @@ export class VisibilityCompatibilityError extends Error {
   }
 }
 
+export type VisibilityCommandDiscovery =
+  | { readonly kind: 'ready'; readonly commands: readonly string[] }
+  | { readonly kind: 'pending' | 'excess'; readonly commandCount: number };
+
 function commandHandle(command: string): number | undefined {
   if (!command.startsWith(visibilityCommandPrefix)) {
     return undefined;
@@ -26,23 +30,22 @@ function commandHandle(command: string): number | undefined {
   return match ? Number.parseInt(match[1], 10) : undefined;
 }
 
-export function resolveVisibilityCommands(
-  repositories: readonly RepositoryIdentity[],
-  commands: readonly string[],
-): readonly VisibilityMapping[] {
-  const candidates = commands
+export function findVisibilityCommands(commands: readonly string[]): readonly string[] {
+  return commands
     .map(command => ({ command, handle: commandHandle(command) }))
     .filter((candidate): candidate is { command: string; handle: number } => candidate.handle !== undefined)
-    .sort((left, right) => left.handle - right.handle);
+    .sort((left, right) => left.handle - right.handle)
+    .map(candidate => candidate.command);
+}
 
-  if (candidates.length !== repositories.length) {
-    throw new VisibilityCompatibilityError(
-      `Expected one native visibility command per Git repository; found ${candidates.length} commands for ${repositories.length} repositories.`,
-    );
-  }
-
-  return repositories.map((repository, index) => ({
-    repository,
-    command: candidates[index].command,
-  }));
+export function discoverVisibilityCommands(
+  repositoryCount: number,
+  commands: readonly string[],
+): VisibilityCommandDiscovery {
+  const candidates = findVisibilityCommands(commands);
+  if (candidates.length === repositoryCount) return { kind: 'ready', commands: candidates };
+  return {
+    kind: candidates.length < repositoryCount ? 'pending' : 'excess',
+    commandCount: candidates.length,
+  };
 }

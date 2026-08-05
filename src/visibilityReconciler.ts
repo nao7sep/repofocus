@@ -23,7 +23,8 @@ export class VisibilityReconciler {
   private readonly hiddenByRepoFocus = new Set<string>();
   private readonly mappings = new Map<string, VisibilityMapping>();
   private state: ReconcilerState = 'active';
-  private filteringEnabled = true;
+  private filteringEnabled = false;
+  private paused = false;
   private requested = false;
   private scheduled = false;
   private queue: Promise<void> = Promise.resolve();
@@ -43,43 +44,41 @@ export class VisibilityReconciler {
   }
 
   setFilteringEnabled(enabled: boolean): Promise<void> {
-    if (this.filteringEnabled === enabled) return this.queue;
     this.filteringEnabled = enabled;
-    if (enabled && this.state === 'active') {
+    if (this.state === 'active') {
       this.requestReconcile();
-    } else {
-      this.requested = false;
+    } else if (!enabled) {
       this.queue = this.queue.then(() => this.restoreOwnedRepositories());
     }
     return this.queue;
   }
 
-  replaceMappings(mappings: readonly VisibilityMapping[]): void {
-    if (this.state !== 'active') return;
-    this.mappings.clear();
-    for (const mapping of mappings) this.mappings.set(repositoryKey(mapping.repository), mapping);
-    this.requestReconcile();
-  }
-
-  adoptVisibility(
+  replaceKnownVisibility(
     mappings: readonly VisibilityMapping[],
     hiddenRepositories: readonly RepositoryIdentity[],
   ): void {
     if (this.state !== 'active') return;
+    this.mappings.clear();
+    for (const mapping of mappings) this.mappings.set(repositoryKey(mapping.repository), mapping);
     this.hiddenByRepoFocus.clear();
     for (const repository of hiddenRepositories) {
       this.hiddenByRepoFocus.add(repositoryKey(repository));
     }
-    this.replaceMappings(mappings);
+    this.requestReconcile();
   }
 
-  async resetForAllVisibleBaseline(): Promise<void> {
-    if (this.state !== 'active') return;
-    this.filteringEnabled = false;
+  pause(): Promise<void> {
+    if (this.state !== 'active') return this.queue;
+    this.paused = true;
     this.requested = false;
-    await this.queue;
-    this.hiddenByRepoFocus.clear();
-    this.mappings.clear();
+    return this.queue;
+  }
+
+  resume(): Promise<void> {
+    if (this.state !== 'active') return this.queue;
+    this.paused = false;
+    this.requestReconcile();
+    return this.queue;
   }
 
   setActionability(repository: RepositoryIdentity, value: RepositoryActionability): void {
@@ -106,21 +105,28 @@ export class VisibilityReconciler {
   failCompatibility(error: unknown): Promise<void> {
     if (this.state !== 'active') return this.queue;
     this.state = 'failed';
+    this.paused = false;
     this.options.onError?.(asError(error));
     this.requested = false;
     this.queue = this.queue.then(() => this.restoreOwnedRepositories());
     return this.queue;
   }
 
-  async showAll(): Promise<void> {
+  invalidateVisibility(error: unknown): Promise<void> {
+    if (this.state !== 'active') return this.queue;
+    this.state = 'failed';
+    this.paused = false;
+    this.options.onError?.(asError(error));
     this.requested = false;
-    await this.queue;
-    await this.restoreOwnedRepositories();
+    this.hiddenByRepoFocus.clear();
+    this.mappings.clear();
+    return this.queue;
   }
 
   async shutdown(): Promise<void> {
     if (this.state === 'disposed') return;
     this.state = 'disposed';
+    this.paused = false;
     this.requested = false;
     await this.queue;
     await this.restoreOwnedRepositories();
@@ -130,14 +136,14 @@ export class VisibilityReconciler {
 
   private requestReconcile(): void {
     this.requested = true;
-    if (this.scheduled) return;
+    if (this.scheduled || this.paused || this.state !== 'active') return;
     this.scheduled = true;
     this.queue = this.queue.then(() => this.drain());
   }
 
   private async drain(): Promise<void> {
     try {
-      while (this.requested && this.state === 'active' && this.filteringEnabled) {
+      while (this.requested && this.state === 'active' && !this.paused) {
         this.requested = false;
         await this.reconcileOnce();
       }
@@ -148,12 +154,11 @@ export class VisibilityReconciler {
 
   private async reconcileOnce(): Promise<void> {
     for (const [key, mapping] of this.mappings) {
-      if (this.state !== 'active') return;
+      if (this.state !== 'active' || this.paused) return;
       const value = this.actionability.get(key);
-      if (!value) continue;
-
       const hidden = this.hiddenByRepoFocus.has(key);
-      if (!value.actionable && !hidden) {
+      const shouldBeHidden = this.filteringEnabled && value?.actionable === false;
+      if (shouldBeHidden && !hidden) {
         try {
           await this.options.toggle(mapping.command);
           this.hiddenByRepoFocus.add(key);
@@ -161,7 +166,7 @@ export class VisibilityReconciler {
           await this.handleToggleFailure(error);
           return;
         }
-      } else if (value.actionable && hidden) {
+      } else if (!shouldBeHidden && hidden) {
         try {
           await this.options.toggle(mapping.command);
           this.hiddenByRepoFocus.delete(key);

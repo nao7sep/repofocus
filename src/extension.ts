@@ -9,26 +9,19 @@ import { createDiagnostics } from './diagnostics';
 import type { GitApi, GitExtension, GitRepository } from './gitApi';
 import { GitRepositoryMonitor } from './gitRepositoryMonitor';
 import { Logger } from './logger';
-import { nativeVisibilityLimitIssue } from './nativeVisibilityLimit';
 import { RemoteFetchScheduler, type RemoteFetchTarget } from './remoteFetchScheduler';
 import { toActionabilityInput } from './repositoryStateAdapter';
-import { establishAllVisibleBaseline } from './visibilityBaseline';
-import {
-  resolveVisibilityCommands,
-  type VisibilityMapping,
-} from './visibilityCommandResolver';
+import { VisibilityMappingCoordinator } from './visibilityMappingCoordinator';
 import { VisibilityReconciler } from './visibilityReconciler';
 
 const gitExtensionId = 'vscode.git';
 const filteringStateKey = 'repofocus.filteringEnabledByWorkspace';
-const repositoryTopologySettleMilliseconds = 1_000;
 
 export interface RepoFocusExtensionApi {
   readonly git: GitApi;
   getActionability(repository: GitRepository): RepositoryActionability | undefined;
   isFilteringEnabled(): boolean;
   isHiddenByRepoFocus(repository: GitRepository): boolean;
-  resolveVisibilityMappings(): Promise<readonly VisibilityMapping[]>;
   showAll(): Promise<void>;
   shutdown(): Promise<void>;
   waitForSettled(): Promise<void>;
@@ -61,34 +54,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
   const remoteFailures = new Map<string, string>();
   let policy = readPolicy();
   let alwaysShowPatterns = readAlwaysShowPatterns();
-  let mappingRefresh = Promise.resolve();
-  let mappingRefreshGeneration = 0;
-  let baselineEstablished = false;
-  let stopping = false;
   let compatibilityFailureReported = false;
-
-  const resolveVisibilityMappings = async (): Promise<readonly VisibilityMapping[]> => {
-    const commands = await vscode.commands.getCommands(true);
-    return resolveVisibilityCommands(git.repositories, commands);
-  };
-
-  const resolveSettledVisibilityMappings = async (
-    generation: number,
-  ): Promise<readonly VisibilityMapping[]> => {
-    let lastError: unknown;
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      if (generation !== mappingRefreshGeneration || stopping) return [];
-      try {
-        return await resolveVisibilityMappings();
-      } catch (error) {
-        lastError = error;
-        await new Promise(resolve => setTimeout(resolve, 50));
-      }
-    }
-    throw lastError instanceof Error
-      ? lastError
-      : new Error('Native visibility mapping failed.');
-  };
 
   const reconciler = new VisibilityReconciler({
     toggle: async command => {
@@ -122,73 +88,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
     },
   });
   let filteringEnabled = context.workspaceState.get(filteringStateKey, true);
-  await reconciler.setFilteringEnabled(false);
   await vscode.commands.executeCommand('setContext', 'repofocus.compatible', true);
   await vscode.commands.executeCommand('setContext', 'repofocus.filteringEnabled', filteringEnabled);
   await vscode.commands.executeCommand('setContext', 'repofocus.hasError', false);
 
-  const refreshMappings = async (generation: number): Promise<void> => {
-    const nativeVisibleLimit = vscode.workspace.getConfiguration('scm').get('repositories.visible', 10);
-    const visibleLimitIssue = nativeVisibilityLimitIssue(git.repositories.length, nativeVisibleLimit);
-    if (visibleLimitIssue) {
-      await reconciler.failCompatibility(new Error(visibleLimitIssue));
-      return;
-    }
-    if (git.repositories.length > 0) {
-      await vscode.commands.executeCommand('workbench.view.scm');
-      await new Promise(resolve => setTimeout(resolve, 250));
-      await vscode.commands.executeCommand('workbench.scm.focus');
-    }
-    let lastError: unknown;
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      if (generation !== mappingRefreshGeneration || stopping) return;
-      try {
-        if (git.repositories.length > 0) {
-          await reconciler.resetForAllVisibleBaseline();
-          if (generation !== mappingRefreshGeneration || stopping) return;
-          const candidateMappings = await resolveSettledVisibilityMappings(generation);
-          if (generation !== mappingRefreshGeneration || stopping) return;
-          const baseline = await establishAllVisibleBaseline(
-            git.repositories,
-            candidateMappings,
-            async command => {
-              await vscode.commands.executeCommand(command);
-            },
-          );
-          if (generation !== mappingRefreshGeneration || stopping) return;
-          reconciler.adoptVisibility(baseline.mappings, baseline.hiddenRepositories);
-          baselineEstablished = true;
-          await reconciler.setFilteringEnabled(filteringEnabled);
-          logger.info('Visibility filtering initialized.', {
-            repositoryCount: baseline.mappings.length,
-            actionableRepositoryCount: [...actionability.values()]
-              .filter(value => value.actionable).length,
-            hiddenRepositoryCount: reconciler.hiddenRepositoryCount,
-            generation,
-          });
-        } else {
-          const candidateMappings = await resolveSettledVisibilityMappings(generation);
-          if (generation !== mappingRefreshGeneration || stopping) return;
-          reconciler.replaceMappings(candidateMappings);
-          await reconciler.setFilteringEnabled(filteringEnabled);
-        }
-        return;
-      } catch (error) {
-        lastError = error;
-        await new Promise(resolve => setTimeout(resolve, 50));
-      }
-    }
-    if (generation !== mappingRefreshGeneration || stopping) return;
-    await reconciler.failCompatibility(lastError ?? new Error('Native visibility mapping failed.'));
-  };
-
-  const scheduleMappingRefresh = (): void => {
-    const generation = ++mappingRefreshGeneration;
-    mappingRefresh = (async () => {
-      await new Promise(resolve => setTimeout(resolve, repositoryTopologySettleMilliseconds));
-      if (!stopping && generation === mappingRefreshGeneration) await refreshMappings(generation);
-    })();
-  };
+  const visibility = new VisibilityMappingCoordinator({
+    execute: async command => {
+      await vscode.commands.executeCommand(command);
+    },
+    filteringRequested: () => filteringEnabled,
+    getCommands: async () => await vscode.commands.getCommands(true),
+    getNativeVisibleLimit: () =>
+      vscode.workspace.getConfiguration('scm').get('repositories.visible', 10),
+    getRepositories: () => git.repositories,
+    minimumRepositoryCount: readMinimumRepositoryCount,
+    reconciler,
+    onInitialized: event => {
+      logger.info('Visibility filtering initialized.', {
+        repositoryCount: event.repositoryCount,
+        actionableRepositoryCount: [...actionability.values()]
+          .filter(value => value.actionable).length,
+        hiddenRepositoryCount: reconciler.hiddenRepositoryCount,
+        revision: event.revision,
+      });
+    },
+  });
 
   const evaluateRepository = (repository: GitRepository): void => {
     let value: RepositoryActionability;
@@ -211,18 +135,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
   };
 
   const monitor = new GitRepositoryMonitor(git, {
-    onRepositoryOpened: () => scheduleMappingRefresh(),
+    onRepositoryOpened: () => visibility.requestRefresh(),
     onRepositoryChanged: evaluateRepository,
     onRepositoryClosed: repository => {
       const key = repository.rootUri.toString();
       actionability.delete(key);
       remoteFailures.delete(key);
       reconciler.removeRepository(repository);
-      scheduleMappingRefresh();
+      visibility.requestRefresh();
     },
   });
   context.subscriptions.push(monitor);
-  scheduleMappingRefresh();
+  visibility.requestRefresh();
 
   const getActionability = (repository: GitRepository): RepositoryActionability | undefined =>
     actionability.get(repository.rootUri.toString());
@@ -271,25 +195,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
       vscodeVersion: vscode.version,
       platform: `${process.platform}-${process.arch}`,
       filteringEnabled,
+      filteringActive: reconciler.enabled,
       compatible: reconciler.compatible,
-      baselineEstablished,
+      baselineEstablished: visibility.baselineEstablished,
       repositoryStates: [...actionability.values()],
       hiddenByRepoFocusCount: reconciler.hiddenRepositoryCount,
       remoteFailureCount: remoteFailures.size,
       policy,
       alwaysShowPatternCount: alwaysShowPatterns.length,
       fetchIntervalMinutes: fetchIntervalMilliseconds / 60_000,
+      minimumRepositoryCount: readMinimumRepositoryCount(),
     });
     await vscode.env.clipboard.writeText(diagnostics);
     void vscode.window.showInformationMessage('RepoFocus diagnostics copied to the clipboard.');
   };
 
   const waitForSettled = async (): Promise<void> => {
-    let observedRefresh: Promise<void>;
-    do {
-      observedRefresh = mappingRefresh;
-      await observedRefresh;
-    } while (observedRefresh !== mappingRefresh);
+    await visibility.waitForIdle();
     await fetchScheduler.waitForIdle();
     await reconciler.waitForIdle();
   };
@@ -298,18 +220,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
     filteringEnabled = enabled;
     await context.workspaceState.update(filteringStateKey, enabled);
     await vscode.commands.executeCommand('setContext', 'repofocus.filteringEnabled', enabled);
-    if (enabled && !baselineEstablished) {
-      scheduleMappingRefresh();
-      await waitForSettled();
-    } else {
-      await reconciler.setFilteringEnabled(enabled);
-    }
+    await visibility.updateFiltering();
     logger.info('Filtering state changed.', { enabled });
   };
 
   context.subscriptions.push(
     vscode.commands.registerCommand('repofocus.toggle', async () => {
-      await setFilteringEnabled(!reconciler.enabled);
+      await setFilteringEnabled(!filteringEnabled);
     }),
     vscode.commands.registerCommand('repofocus.refresh', async () => {
       logger.info('Manual refresh requested.');
@@ -337,10 +254,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
       }
       fetchIntervalMilliseconds = nextFetchInterval;
       evaluateAll();
+      if (event.affectsConfiguration('repofocus.minimumRepositoryCount')) {
+        void visibility.updateFiltering();
+      }
       logger.info('Actionability policy changed.', {
         ...policy,
         alwaysShowPatterns: alwaysShowPatterns.length,
         fetchIntervalMinutes: fetchIntervalMilliseconds / 60_000,
+        minimumRepositoryCount: readMinimumRepositoryCount(),
       });
     }),
   );
@@ -351,15 +272,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
     ...policy,
     alwaysShowPatterns: alwaysShowPatterns.length,
     fetchIntervalMinutes: fetchIntervalMilliseconds / 60_000,
+    minimumRepositoryCount: readMinimumRepositoryCount(),
   });
 
   let shutdownPromise: Promise<void> | undefined;
   const shutdown = (): Promise<void> => {
     shutdownPromise ??= (async () => {
-      stopping = true;
       monitor.dispose();
+      visibility.dispose();
       fetchScheduler.dispose();
-      await mappingRefresh;
+      await visibility.waitForIdle();
       await reconciler.shutdown();
       actionability.clear();
       remoteFailures.clear();
@@ -374,7 +296,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
     getActionability,
     isFilteringEnabled: () => filteringEnabled,
     isHiddenByRepoFocus: repository => reconciler.isHiddenByRepoFocus(repository),
-    resolveVisibilityMappings,
     showAll: () => setFilteringEnabled(false),
     shutdown,
     waitForSettled,
@@ -397,6 +318,11 @@ function readFetchIntervalMilliseconds(): number {
 
 function readAlwaysShowPatterns(): readonly string[] {
   return vscode.workspace.getConfiguration('repofocus').get<readonly string[]>('alwaysShow', []);
+}
+
+function readMinimumRepositoryCount(): number {
+  const value = vscode.workspace.getConfiguration('repofocus').get('minimumRepositoryCount', 2);
+  return Number.isSafeInteger(value) && value >= 1 ? value : 2;
 }
 
 export async function deactivate(): Promise<void> {

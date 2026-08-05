@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GitRepository } from '../src/gitApi';
-import { establishAllVisibleBaseline } from '../src/visibilityBaseline';
+import { establishVisibilityBaseline } from '../src/visibilityBaseline';
 
 function repository(name: string, selected: () => boolean): GitRepository {
   return {
@@ -9,7 +9,13 @@ function repository(name: string, selected: () => boolean): GitRepository {
   } as unknown as GitRepository;
 }
 
-describe('establishAllVisibleBaseline', () => {
+const fastTimings = {
+  modeSettleMilliseconds: 0,
+  probeMilliseconds: 1,
+  selectionTimeoutMilliseconds: 1,
+} as const;
+
+describe('establishVisibilityBaseline', () => {
   it('discovers command identity from reversible focus changes', async () => {
     const names = ['alpha', 'beta', 'gamma'];
     let selectedName = 'beta';
@@ -21,9 +27,9 @@ describe('establishAllVisibleBaseline', () => {
       ['toggle.scm2', 'beta'],
     ]);
     const commands = [...targets.keys()];
-    const baseline = await establishAllVisibleBaseline(
+    const baseline = await establishVisibilityBaseline(
       repositories,
-      commands.map((command, index) => ({ repository: repositories[index], command })),
+      commands,
       command => {
         if (command.endsWith('.single')) {
           const first = names.find(name => visible.has(name)) ?? names[0];
@@ -42,8 +48,7 @@ describe('establishAllVisibleBaseline', () => {
         }
         return Promise.resolve();
       },
-      1,
-      1,
+      fastTimings,
     );
 
     expect(baseline.mappings.map(mapping => [mapping.repository.rootUri.toString(), mapping.command])).toEqual([
@@ -63,28 +68,38 @@ describe('establishAllVisibleBaseline', () => {
       repository('alpha', () => true),
       repository('beta', () => false),
     ];
-    await expect(establishAllVisibleBaseline(
+    await expect(establishVisibilityBaseline(
       repositories,
-      ['toggle.scm0', 'toggle.scm1'].map((command, index) => ({
-        repository: repositories[index],
-        command,
-      })),
+      ['toggle.scm0', 'toggle.scm1'],
       () => Promise.resolve(),
-      1,
-      1,
+      fastTimings,
     )).rejects.toThrow('No native visibility command matched');
   });
 
   it('wraps a native command failure', async () => {
     const alpha = repository('alpha', () => true);
-    await expect(establishAllVisibleBaseline(
+    await expect(establishVisibilityBaseline(
       [alpha],
-      [{ repository: alpha, command: 'toggle.scm0' }],
+      ['toggle.scm0'],
       command => command.endsWith('.single')
         ? Promise.reject(new Error('unsupported'))
         : Promise.resolve(),
-      1,
-      1,
-    )).rejects.toThrow('Failed to map and select every repository');
+      fastTimings,
+    )).rejects.toThrow('could not restore the native all-visible state');
+  });
+
+  it('reports that recovery established an all-visible state after a probe failure', async () => {
+    const repositories = [
+      repository('alpha', () => true),
+      repository('beta', () => false),
+    ];
+    const promise = establishVisibilityBaseline(
+      repositories,
+      ['toggle.scm0', 'toggle.scm1'],
+      () => Promise.resolve(),
+      fastTimings,
+    );
+
+    await expect(promise).rejects.toMatchObject({ recoveredToAllVisible: true });
   });
 });

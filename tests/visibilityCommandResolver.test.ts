@@ -1,41 +1,36 @@
 import { describe, expect, it } from 'vitest';
-import {
-  resolveVisibilityCommands,
-  VisibilityCompatibilityError,
-} from '../src/visibilityCommandResolver';
+import { discoverVisibilityCommands } from '../src/visibilityCommandResolver';
 
-function repository(uri: string) {
-  return { rootUri: { toString: () => uri } };
-}
-
-describe('resolveVisibilityCommands', () => {
-  it('maps repository creation order to native SCM handle order', () => {
-    const repositories = [repository('file:///alpha'), repository('file:///beta')];
+describe('discoverVisibilityCommands', () => {
+  it('sorts native visibility commands by SCM handle', () => {
     const commands = [
       'unrelated.command',
       'workbench.scm.action.toggleRepositoryVisibility.scm7',
       'workbench.scm.action.toggleRepositoryVisibility.scm6',
     ];
 
-    expect(resolveVisibilityCommands(repositories, commands)).toEqual([
-      { repository: repositories[0], command: 'workbench.scm.action.toggleRepositoryVisibility.scm6' },
-      { repository: repositories[1], command: 'workbench.scm.action.toggleRepositoryVisibility.scm7' },
-    ]);
+    expect(discoverVisibilityCommands(2, commands)).toEqual({
+      kind: 'ready',
+      commands: [
+        'workbench.scm.action.toggleRepositoryVisibility.scm6',
+        'workbench.scm.action.toggleRepositoryVisibility.scm7',
+      ],
+    });
   });
 
-  it('rejects another SCM provider instead of guessing', () => {
-    const repositories = [repository('file:///alpha')];
+  it('classifies excess commands instead of guessing across SCM providers', () => {
     const commands = [
       'workbench.scm.action.toggleRepositoryVisibility.scm1',
       'workbench.scm.action.toggleRepositoryVisibility.scm2',
     ];
 
-    expect(() => resolveVisibilityCommands(repositories, commands)).toThrow(VisibilityCompatibilityError);
+    expect(discoverVisibilityCommands(1, commands)).toEqual({
+      kind: 'excess',
+      commandCount: 2,
+    });
   });
 
-  it('rejects missing native commands', () => {
-    expect(() => resolveVisibilityCommands([repository('file:///alpha')], [])).toThrow(
-      VisibilityCompatibilityError,
-    );
+  it('classifies missing commands as pending lazy registration', () => {
+    expect(discoverVisibilityCommands(1, [])).toEqual({ kind: 'pending', commandCount: 0 });
   });
 });

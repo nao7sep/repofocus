@@ -2,7 +2,11 @@ import type { GitRepository } from './gitApi';
 import type { RepositoryIdentity, VisibilityMapping } from './visibilityCommandResolver';
 
 export class VisibilityBaselineError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
+  constructor(
+    message: string,
+    readonly recoveredToAllVisible: boolean,
+    options?: ErrorOptions,
+  ) {
     super(message, options);
     this.name = 'VisibilityBaselineError';
   }
@@ -28,7 +32,7 @@ async function waitForSelectedRepository(
     if (selected) return selected;
     await new Promise(resolve => setTimeout(resolve, 10));
   } while (Date.now() < deadline);
-  throw new VisibilityBaselineError('Native repository focus did not settle.');
+  throw new VisibilityBaselineError('Native repository focus did not settle.', false);
 }
 
 async function waitForDifferentSelection(
@@ -45,23 +49,38 @@ async function waitForDifferentSelection(
   }
 }
 
-export async function establishAllVisibleBaseline(
-  repositories: readonly GitRepository[],
-  candidateMappings: readonly VisibilityMapping[],
-  execute: (command: string) => Promise<void>,
-  timeoutMilliseconds = 1_000,
-  probeMilliseconds = 0,
-): Promise<VisibilityBaseline> {
-  try {
-    await execute('workbench.scm.action.repositories.setSelectionMode.single');
-    await new Promise(resolve => setTimeout(resolve, 250));
-    await execute('workbench.scm.action.repositories.setSelectionMode.multiple');
-    await new Promise(resolve => setTimeout(resolve, 250));
+export interface VisibilityBaselineTimings {
+  readonly modeSettleMilliseconds?: number;
+  readonly probeMilliseconds?: number;
+  readonly selectionTimeoutMilliseconds?: number;
+}
 
-    const remainingCommands = candidateMappings.map(mapping => mapping.command);
+async function revealAllRepositories(
+  execute: (command: string) => Promise<void>,
+  settleMilliseconds: number,
+): Promise<void> {
+  await execute('workbench.scm.action.repositories.setSelectionMode.single');
+  await new Promise(resolve => setTimeout(resolve, settleMilliseconds));
+  await execute('workbench.scm.action.repositories.setSelectionMode.multiple');
+  await new Promise(resolve => setTimeout(resolve, settleMilliseconds));
+}
+
+export async function establishVisibilityBaseline(
+  repositories: readonly GitRepository[],
+  candidateCommands: readonly string[],
+  execute: (command: string) => Promise<void>,
+  timings: VisibilityBaselineTimings = {},
+): Promise<VisibilityBaseline> {
+  const modeSettleMilliseconds = timings.modeSettleMilliseconds ?? 250;
+  const probeMilliseconds = timings.probeMilliseconds ?? 0;
+  const selectionTimeoutMilliseconds = timings.selectionTimeoutMilliseconds ?? 1_000;
+  try {
+    await revealAllRepositories(execute, modeSettleMilliseconds);
+
+    const remainingCommands = [...candidateCommands];
     const mappings: VisibilityMapping[] = [];
     while (remainingCommands.length > 1) {
-      const current = await waitForSelectedRepository(repositories, timeoutMilliseconds);
+      const current = await waitForSelectedRepository(repositories, selectionTimeoutMilliseconds);
       const currentKey = current.rootUri.toString();
       let matchedIndex = -1;
       for (let index = 0; index < remainingCommands.length; index += 1) {
@@ -77,14 +96,23 @@ export async function establishAllVisibleBaseline(
         await execute(command);
       }
       if (matchedIndex === -1) {
-        throw new VisibilityBaselineError('No native visibility command matched the focused repository.');
+        throw new VisibilityBaselineError(
+          'No native visibility command matched the focused repository.',
+          false,
+        );
       }
       remainingCommands.splice(matchedIndex, 1);
     }
 
-    const finalRepository = await waitForSelectedRepository(repositories, timeoutMilliseconds);
+    const finalRepository = await waitForSelectedRepository(
+      repositories,
+      selectionTimeoutMilliseconds,
+    );
     if (remainingCommands.length !== 1) {
-      throw new VisibilityBaselineError('Every Git repository must have exactly one native visibility command.');
+      throw new VisibilityBaselineError(
+        'Every Git repository must have exactly one native visibility command.',
+        false,
+      );
     }
     mappings.push({ repository: finalRepository, command: remainingCommands[0] });
 
@@ -93,17 +121,23 @@ export async function establishAllVisibleBaseline(
       hiddenRepositories: mappings.slice(0, -1).map(mapping => mapping.repository),
     };
   } catch (error) {
+    let recoveryError: unknown;
     try {
-      await execute('workbench.scm.action.repositories.setSelectionMode.single');
-      await new Promise(resolve => setTimeout(resolve, 100));
-      await execute('workbench.scm.action.repositories.setSelectionMode.multiple');
-    } catch {
-      // Preserve the original compatibility failure.
+      await revealAllRepositories(execute, modeSettleMilliseconds);
+    } catch (recoveryFailure) {
+      recoveryError = recoveryFailure;
     }
-    if (error instanceof VisibilityBaselineError) throw error;
+
+    const message = error instanceof VisibilityBaselineError
+      ? error.message
+      : 'Failed to map every repository in VS Code\'s native Repositories view.';
+    if (recoveryError === undefined) {
+      throw new VisibilityBaselineError(message, true, { cause: error });
+    }
     throw new VisibilityBaselineError(
-      'Failed to map and select every repository in VS Code\'s native Repositories view.',
-      { cause: error },
+      `${message} RepoFocus could not restore the native all-visible state.`,
+      false,
+      { cause: new AggregateError([error, recoveryError], 'Visibility mapping and recovery failed.') },
     );
   }
 }

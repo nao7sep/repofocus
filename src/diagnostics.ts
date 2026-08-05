@@ -5,6 +5,7 @@ export interface RepoFocusDiagnosticsInput {
   readonly vscodeVersion: string;
   readonly platform: string;
   readonly filteringEnabled: boolean;
+  readonly filteringActive: boolean;
   readonly compatible: boolean;
   readonly baselineEstablished: boolean;
   readonly repositoryStates: readonly RepositoryActionability[];
@@ -13,6 +14,7 @@ export interface RepoFocusDiagnosticsInput {
   readonly policy: ActionabilityPolicy;
   readonly alwaysShowPatternCount: number;
   readonly fetchIntervalMinutes: number;
+  readonly minimumRepositoryCount: number;
 }
 
 export function createDiagnostics(input: RepoFocusDiagnosticsInput): string {
@@ -29,6 +31,7 @@ export function createDiagnostics(input: RepoFocusDiagnosticsInput): string {
     vscodeVersion: input.vscodeVersion,
     platform: input.platform,
     filteringEnabled: input.filteringEnabled,
+    filteringActive: input.filteringActive,
     compatible: input.compatible,
     baselineEstablished: input.baselineEstablished,
     repositoryCount: input.repositoryStates.length,
@@ -40,6 +43,7 @@ export function createDiagnostics(input: RepoFocusDiagnosticsInput): string {
       ...input.policy,
       alwaysShowPatternCount: input.alwaysShowPatternCount,
       fetchIntervalMinutes: input.fetchIntervalMinutes,
+      minimumRepositoryCount: input.minimumRepositoryCount,
     },
   }, undefined, 2);
 }
