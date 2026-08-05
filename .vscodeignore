@@ -1,0 +1,11 @@
+.gitignore
+.vscode-test/**
+coverage/**
+dist-tests/**
+eslint.config.mjs
+esbuild.mjs
+scripts/**
+src/**
+tests/**
+tsconfig*.json
+vitest.config.mts

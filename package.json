@@ -1,0 +1,71 @@
+{
+  "name": "repofocus",
+  "displayName": "RepoFocus",
+  "description": "Shows only actionable Git repositories in VS Code's native Source Control view.",
+  "version": "0.1.0",
+  "publisher": "nao7sep",
+  "license": "MIT",
+  "preview": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nao7sep/repofocus.git"
+  },
+  "bugs": {
+    "url": "https://github.com/nao7sep/repofocus/issues"
+  },
+  "homepage": "https://github.com/nao7sep/repofocus#readme",
+  "engines": {
+    "vscode": "^1.131.0"
+  },
+  "categories": [
+    "SCM Providers"
+  ],
+  "keywords": [
+    "git",
+    "source-control",
+    "multi-repo",
+    "repository"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "extensionDependencies": [
+    "vscode.git"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false
+    },
+    "virtualWorkspaces": {
+      "supported": false
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
+    "lint": "eslint src tests scripts esbuild.mjs vitest.config.mts",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:integration": "npm run build && node scripts/run-integration-tests.mjs",
+    "check": "npm run typecheck && npm run lint && npm test",
+    "vscode:prepublish": "npm run check && npm run build"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.2",
+    "@types/node": "22.20.1",
+    "@types/vscode": "1.125.0",
+    "@vitest/coverage-v8": "4.1.10",
+    "@vscode/test-electron": "3.1.0",
+    "@vscode/vsce": "3.9.2",
+    "esbuild": "0.28.1",
+    "eslint": "9.39.2",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.66.0",
+    "vitest": "4.1.10"
+  }
+}
