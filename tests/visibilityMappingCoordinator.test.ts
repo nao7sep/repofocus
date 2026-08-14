@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { RepositoryActionability } from '../src/actionability';
 import type { GitRepository } from '../src/gitApi';
-import { visibilityCommandPrefix } from '../src/visibilityCommandResolver';
+import { selectionModeCommands, visibilityCommandPrefix } from '../src/visibilityCommandResolver';
 import { VisibilityMappingCoordinator } from '../src/visibilityMappingCoordinator';
 import { VisibilityReconciler } from '../src/visibilityReconciler';
 
@@ -9,6 +9,8 @@ const clean: RepositoryActionability = { actionable: false, reasons: [] };
 
 interface NativeRepositoryFixture {
   readonly commands: readonly string[];
+  /** What `getCommands` returns: the per-repository family plus its siblings. */
+  readonly discoveryCommands: readonly string[];
   readonly execute: (command: string) => Promise<void>;
   readonly repositories: readonly GitRepository[];
 }
@@ -27,6 +29,11 @@ function nativeRepositories(names: readonly string[]): NativeRepositoryFixture {
   const targets = new Map(commands.map((command, index) => [command, names[index]]));
   return {
     commands,
+    discoveryCommands: [
+      selectionModeCommands.single,
+      selectionModeCommands.multiple,
+      ...commands,
+    ],
     repositories,
     execute: command => {
       if (command.endsWith('.single')) {
@@ -65,19 +72,17 @@ function coordinatorFixture(
 } {
   const native = nativeRepositories(names);
   const execute = vi.fn(native.execute);
-  const getCommands = vi.fn(() => Promise.resolve(native.commands));
+  const getCommands = vi.fn(() => Promise.resolve(native.discoveryCommands));
   const reconciler = new VisibilityReconciler({ toggle: execute });
   for (const repository of native.repositories) reconciler.setActionability(repository, clean);
   const coordinator = new VisibilityMappingCoordinator({
-    execute,
     filteringRequested: () => true,
     getCommands,
-    getNativeVisibleLimit: () => 100,
     getRepositories: () => native.repositories,
+    multipleSelectionMode: () => true,
     minimumRepositoryCount: () => minimumRepositoryCount,
     reconciler,
-    baselineTimings: {
-      modeSettleMilliseconds: 0,
+    probeTimings: {
       probeMilliseconds: 1,
       selectionTimeoutMilliseconds: 1,
     },
@@ -119,17 +124,20 @@ describe('VisibilityMappingCoordinator', () => {
     const reconciler = new VisibilityReconciler({ toggle: execute });
     for (const repository of native.repositories) reconciler.setActionability(repository, clean);
     const coordinator = new VisibilityMappingCoordinator({
-      execute,
       filteringRequested: () => true,
       getCommands: () => {
         commandReadCount += 1;
-        return Promise.resolve(commandReadCount === 1 ? [] : native.commands);
+        // Before Source Control is rendered, only the eagerly-registered
+        // selection-mode siblings exist.
+        return Promise.resolve(commandReadCount === 1
+          ? [selectionModeCommands.single, selectionModeCommands.multiple]
+          : native.discoveryCommands);
       },
-      getNativeVisibleLimit: () => 100,
       getRepositories: () => native.repositories,
+      multipleSelectionMode: () => true,
       minimumRepositoryCount: () => 2,
       reconciler,
-      baselineTimings: { modeSettleMilliseconds: 0, probeMilliseconds: 1 },
+      probeTimings: { probeMilliseconds: 1 },
       commandPollMilliseconds: 1,
       commandRetryAttempts: 1,
       topologySettleMilliseconds: 0,
@@ -151,15 +159,14 @@ describe('VisibilityMappingCoordinator', () => {
     const reconciler = new VisibilityReconciler({ toggle: execute });
     for (const repository of native.repositories) reconciler.setActionability(repository, clean);
     const coordinator = new VisibilityMappingCoordinator({
-      execute,
       filteringRequested: () => true,
-      getCommands: () => Promise.resolve(native.commands),
-      getNativeVisibleLimit: () => 100,
+      getCommands: () => Promise.resolve(native.discoveryCommands),
       getRepositories: () => native.repositories,
+      multipleSelectionMode: () => true,
       minimumRepositoryCount: () => 2,
       onInitialized: initialized,
       reconciler,
-      baselineTimings: { modeSettleMilliseconds: 0, probeMilliseconds: 1 },
+      probeTimings: { probeMilliseconds: 1 },
       topologySettleMilliseconds: 0,
     });
 
@@ -179,17 +186,16 @@ describe('VisibilityMappingCoordinator', () => {
     const reconciler = new VisibilityReconciler({ toggle: execute });
     for (const repository of native.repositories) reconciler.setActionability(repository, clean);
     const coordinator = new VisibilityMappingCoordinator({
-      execute,
       filteringRequested: () => filteringRequested,
       getCommands: () => {
         commandReads += 1;
-        return Promise.resolve(native.commands);
+        return Promise.resolve(native.discoveryCommands);
       },
-      getNativeVisibleLimit: () => 100,
       getRepositories: () => native.repositories,
+      multipleSelectionMode: () => true,
       minimumRepositoryCount: () => 2,
       reconciler,
-      baselineTimings: { modeSettleMilliseconds: 0, probeMilliseconds: 1 },
+      probeTimings: { probeMilliseconds: 1 },
       topologySettleMilliseconds: 0,
     });
     coordinator.requestRefresh();
@@ -205,49 +211,67 @@ describe('VisibilityMappingCoordinator', () => {
     expect(commandReads).toBe(1);
   });
 
-  it('fails compatibility before native mutation when the visible-repository limit is too low', async () => {
+  it('never consults or writes VS Code configuration while mapping', async () => {
+    const fixture = coordinatorFixture(['alpha', 'beta']);
+
+    fixture.coordinator.requestRefresh();
+    await fixture.coordinator.waitForIdle();
+
+    expect(fixture.coordinator.baselineEstablished).toBe(true);
+    expect(fixture.execute.mock.calls.flat().some(command =>
+      String(command).includes('setSelectionMode'))).toBe(false);
+  });
+
+  it('declines without failing compatibility when repositories are already hidden', async () => {
     const native = nativeRepositories(['alpha', 'beta']);
     const onError = vi.fn();
-    const execute = vi.fn(native.execute);
+    const onUnavailable = vi.fn();
+    // Nothing moves focus, so the probe cannot identify anything: the shape a
+    // pre-hidden repository set produces.
+    const execute = vi.fn(() => Promise.resolve());
     const reconciler = new VisibilityReconciler({ toggle: execute, onError });
     const coordinator = new VisibilityMappingCoordinator({
-      execute,
       filteringRequested: () => true,
-      getCommands: () => Promise.resolve(native.commands),
-      getNativeVisibleLimit: () => 1,
+      getCommands: () => Promise.resolve(native.discoveryCommands),
       getRepositories: () => native.repositories,
+      multipleSelectionMode: () => true,
       minimumRepositoryCount: () => 2,
       reconciler,
+      onUnavailable,
+      probeTimings: { probeMilliseconds: 1, selectionTimeoutMilliseconds: 1 },
       topologySettleMilliseconds: 0,
     });
 
     coordinator.requestRefresh();
     await coordinator.waitForIdle();
 
-    expect(reconciler.compatible).toBe(false);
-    expect(onError).toHaveBeenCalledOnce();
-    expect(execute).not.toHaveBeenCalled();
+    expect(onUnavailable).toHaveBeenCalledWith('repositories-already-hidden');
+    expect(coordinator.mappingState).toBe('repositories-already-hidden');
+    // Declining is not a compatibility failure: recovery is still possible.
+    expect(reconciler.compatible).toBe(true);
+    expect(reconciler.enabled).toBe(false);
+    expect(reconciler.hiddenRepositoryCount).toBe(0);
+    expect(onError).not.toHaveBeenCalled();
   });
 
-  it('fails safely from the recovered all-visible state when mapping cannot identify a command', async () => {
-    const native = nativeRepositories(['alpha', 'beta']);
+  it('restores everything the probe hid when a native command fails part-way', async () => {
+    const native = nativeRepositories(['alpha', 'beta', 'gamma']);
     const onError = vi.fn();
+    let toggles = 0;
     const execute = vi.fn((command: string) => {
-      if (command.endsWith('.single') || command.endsWith('.multiple')) {
-        return native.execute(command);
-      }
-      return Promise.resolve();
+      toggles += 1;
+      // Fail after the probe has already hidden one repository.
+      return toggles === 3 ? Promise.reject(new Error('native command failed')) : native.execute(command);
     });
     const reconciler = new VisibilityReconciler({ toggle: execute, onError });
     const coordinator = new VisibilityMappingCoordinator({
-      execute,
       filteringRequested: () => true,
-      getCommands: () => Promise.resolve(native.commands),
-      getNativeVisibleLimit: () => 100,
+      getCommands: () => Promise.resolve(native.discoveryCommands),
       getRepositories: () => native.repositories,
+      multipleSelectionMode: () => true,
       minimumRepositoryCount: () => 2,
       reconciler,
-      baselineTimings: { modeSettleMilliseconds: 0, probeMilliseconds: 1 },
+      probeTimings: { probeMilliseconds: 1, selectionTimeoutMilliseconds: 1 },
       topologySettleMilliseconds: 0,
     });
 
@@ -255,48 +279,55 @@ describe('VisibilityMappingCoordinator', () => {
     await coordinator.waitForIdle();
 
     expect(reconciler.compatible).toBe(false);
+    // The ledger knew exactly what had been hidden, so nothing is stranded.
     expect(reconciler.hiddenRepositoryCount).toBe(0);
-    expect(onError).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalled();
   });
 
-  it('invalidates uncertain ownership when mapping and all-visible recovery both fail', async () => {
+  it('declines while the repository selection mode is single, and recovers when it changes', async () => {
     const native = nativeRepositories(['alpha', 'beta']);
-    const onError = vi.fn();
-    const execute = vi.fn((command: string) => command.endsWith('.single')
-      ? Promise.reject(new Error('selection mode unavailable'))
-      : native.execute(command));
-    const reconciler = new VisibilityReconciler({ toggle: execute, onError });
+    const onUnavailable = vi.fn();
+    const execute = vi.fn(native.execute);
+    const reconciler = new VisibilityReconciler({ toggle: execute });
+    for (const repository of native.repositories) reconciler.setActionability(repository, clean);
+    let multiple = false;
     const coordinator = new VisibilityMappingCoordinator({
-      execute,
       filteringRequested: () => true,
-      getCommands: () => Promise.resolve(native.commands),
-      getNativeVisibleLimit: () => 100,
+      getCommands: () => Promise.resolve(native.discoveryCommands),
       getRepositories: () => native.repositories,
+      multipleSelectionMode: () => multiple,
       minimumRepositoryCount: () => 2,
       reconciler,
-      baselineTimings: { modeSettleMilliseconds: 0, probeMilliseconds: 1 },
+      onUnavailable,
+      probeTimings: { probeMilliseconds: 1, selectionTimeoutMilliseconds: 1 },
       topologySettleMilliseconds: 0,
     });
 
     coordinator.requestRefresh();
     await coordinator.waitForIdle();
 
-    expect(reconciler.compatible).toBe(false);
-    expect(reconciler.hiddenRepositoryCount).toBe(0);
-    expect(onError).toHaveBeenCalledOnce();
+    expect(onUnavailable).toHaveBeenCalledWith('single-selection-mode');
+    expect(execute).not.toHaveBeenCalled();
+    expect(reconciler.compatible).toBe(true);
+
+    multiple = true;
+    coordinator.requestRefresh();
+    await coordinator.waitForIdle();
+
+    expect(coordinator.baselineEstablished).toBe(true);
+    expect(reconciler.hiddenRepositoryCount).toBe(2);
   });
 
-  it('surfaces command-enumeration failures instead of treating them as lazy registration', async () => {
+  it('fails compatibility when the native selection-mode command family disappears', async () => {
     const native = nativeRepositories(['alpha', 'beta']);
-    const failure = new Error('command registry unavailable');
     const onError = vi.fn();
     const reconciler = new VisibilityReconciler({ toggle: native.execute, onError });
     const coordinator = new VisibilityMappingCoordinator({
-      execute: native.execute,
       filteringRequested: () => true,
-      getCommands: () => Promise.reject(failure),
-      getNativeVisibleLimit: () => 100,
+      // The per-repository family is intact; its eagerly-registered sibling is not.
+      getCommands: () => Promise.resolve(native.commands),
       getRepositories: () => native.repositories,
+      multipleSelectionMode: () => true,
       minimumRepositoryCount: () => 2,
       reconciler,
       commandRetryAttempts: 1,
@@ -307,7 +338,32 @@ describe('VisibilityMappingCoordinator', () => {
     await coordinator.waitForIdle();
 
     expect(reconciler.compatible).toBe(false);
-    expect(onError).toHaveBeenCalledWith(failure);
+    const reported: unknown = onError.mock.calls[0][0];
+    expect(reported).toBeInstanceOf(Error);
+    expect((reported as Error).message).toContain('selection-mode commands');
+  });
+
+  it('surfaces command-enumeration failures instead of treating them as lazy registration', async () => {
+    const native = nativeRepositories(['alpha', 'beta']);
+    const failure = new Error('command registry unavailable');
+    const onError = vi.fn();
+    const reconciler = new VisibilityReconciler({ toggle: native.execute, onError });
+    const coordinator = new VisibilityMappingCoordinator({
+      filteringRequested: () => true,
+      getCommands: () => Promise.reject(failure),
+      getRepositories: () => native.repositories,
+      multipleSelectionMode: () => true,
+      minimumRepositoryCount: () => 2,
+      reconciler,
+      commandRetryAttempts: 1,
+      topologySettleMilliseconds: 0,
+    });
+
+    coordinator.requestRefresh();
+    await coordinator.waitForIdle();
+
+    expect(reconciler.compatible).toBe(false);
+    expect(onError.mock.calls[0][0]).toBe(failure);
   });
 
   it('finishes an in-flight mapping transaction before processing a newer topology', async () => {
@@ -315,7 +371,7 @@ describe('VisibilityMappingCoordinator', () => {
     const native = nativeRepositories(['alpha']);
     let requestedDuringTransaction = false;
     const execute = vi.fn(async (command: string) => {
-      if (command.endsWith('.single') && !requestedDuringTransaction) {
+      if (!requestedDuringTransaction) {
         requestedDuringTransaction = true;
         coordinator.requestRefresh();
       }
@@ -324,22 +380,21 @@ describe('VisibilityMappingCoordinator', () => {
     const reconciler = new VisibilityReconciler({ toggle: execute });
     reconciler.setActionability(native.repositories[0], clean);
     const coordinator = new VisibilityMappingCoordinator({
-      execute,
       filteringRequested: () => true,
-      getCommands: () => Promise.resolve(native.commands),
-      getNativeVisibleLimit: () => 100,
+      getCommands: () => Promise.resolve(native.discoveryCommands),
       getRepositories: () => native.repositories,
+      multipleSelectionMode: () => true,
       minimumRepositoryCount: () => 1,
       onInitialized: initialized,
       reconciler,
-      baselineTimings: { modeSettleMilliseconds: 0, probeMilliseconds: 1 },
+      probeTimings: { probeMilliseconds: 1 },
       topologySettleMilliseconds: 0,
     });
 
     coordinator.requestRefresh();
     await coordinator.waitForIdle();
 
-    expect(execute.mock.calls.filter(([command]) => String(command).endsWith('.single'))).toHaveLength(2);
+    expect(requestedDuringTransaction).toBe(true);
     expect(initialized).toHaveBeenCalledOnce();
     expect(coordinator.baselineEstablished).toBe(true);
     expect(reconciler.hiddenRepositoryCount).toBe(1);

@@ -11,6 +11,7 @@ import { GitRepositoryMonitor } from './gitRepositoryMonitor';
 import { Logger } from './logger';
 import { RemoteFetchScheduler, type RemoteFetchTarget } from './remoteFetchScheduler';
 import { toActionabilityInput } from './repositoryStateAdapter';
+import { selectionModeCommands } from './visibilityCommandResolver';
 import { VisibilityMappingCoordinator } from './visibilityMappingCoordinator';
 import { VisibilityReconciler } from './visibilityReconciler';
 
@@ -51,7 +52,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
   const extensionVersion = typeof manifest.version === 'string' ? manifest.version : 'unknown';
   context.subscriptions.push(output);
   const actionability = new Map<string, RepositoryActionability>();
-  const remoteFailures = new Map<string, string>();
+  // Bound once the fetch scheduler exists; it owns every remote-failure fact.
+  let remoteFailure: (key: string) => string | undefined = () => undefined;
   let policy = readPolicy();
   let alwaysShowPatterns = readAlwaysShowPatterns();
   let compatibilityFailureReported = false;
@@ -60,18 +62,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
     toggle: async command => {
       await vscode.commands.executeCommand(command);
     },
-    onError: error => {
-      logger.error('Native visibility compatibility failed.', error);
+    onError: (error, failure) => {
+      logger.error('Native visibility compatibility failed.', error, {
+        strandedCommandCount: failure.strandedCommandCount,
+      });
       void vscode.commands.executeCommand('setContext', 'repofocus.compatible', false);
       void vscode.commands.executeCommand('setContext', 'repofocus.hasError', true);
       if (compatibilityFailureReported) return;
       compatibilityFailureReported = true;
+      // Offer only what can act in this state: with nothing left hidden,
+      // "Show All Repositories" would be a button that does nothing.
+      const actions = failure.strandedCommandCount > 0
+        ? ['Show All Repositories', 'Copy Diagnostics', 'Open Documentation', 'Show Output']
+        : ['Copy Diagnostics', 'Open Documentation', 'Show Output'];
+      const stranded = failure.strandedCommandCount > 0
+        ? ` ${failure.strandedCommandCount} repositories may still be hidden.`
+        : '';
       void vscode.window.showErrorMessage(
-        `RepoFocus disabled filtering: ${error.message}`,
-        'Show All Repositories',
-        'Copy Diagnostics',
-        'Open Documentation',
-        'Show Output',
+        `RepoFocus disabled filtering: ${error.message}${stranded}`,
+        ...actions,
       ).then(selection => {
         if (selection === 'Show All Repositories') {
           void vscode.commands.executeCommand('repofocus.showAll');
@@ -93,16 +102,38 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
   await vscode.commands.executeCommand('setContext', 'repofocus.hasError', false);
 
   const visibility = new VisibilityMappingCoordinator({
-    execute: async command => {
-      await vscode.commands.executeCommand(command);
-    },
     filteringRequested: () => filteringEnabled,
     getCommands: async () => await vscode.commands.getCommands(true),
-    getNativeVisibleLimit: () =>
-      vscode.workspace.getConfiguration('scm').get('repositories.visible', 10),
     getRepositories: () => git.repositories,
     minimumRepositoryCount: readMinimumRepositoryCount,
+    multipleSelectionMode: () =>
+      vscode.workspace.getConfiguration('scm')
+        .get<string>('repositories.selectionMode', 'multiple') !== 'single',
     reconciler,
+    onUnavailable: reason => {
+      logger.info('Visibility filtering is not active.', { reason });
+      if (reason === 'repositories-already-hidden') {
+        void vscode.window.showWarningMessage(
+          'RepoFocus cannot filter while repositories are already hidden in the Source Control '
+          + 'Repositories view, because VS Code offers no way to identify them.',
+          'Reveal All Repositories',
+        ).then(selection => {
+          if (selection) void vscode.commands.executeCommand('repofocus.revealAll');
+        });
+      } else if (reason === 'single-selection-mode') {
+        void vscode.window.showWarningMessage(
+          'RepoFocus needs VS Code\'s Source Control repository selection mode set to "multiple".',
+          'Open Setting',
+        ).then(selection => {
+          if (selection) {
+            void vscode.commands.executeCommand(
+              'workbench.action.openSettings',
+              'scm.repositories.selectionMode',
+            );
+          }
+        });
+      }
+    },
     onInitialized: event => {
       logger.info('Visibility filtering initialized.', {
         repositoryCount: event.repositoryCount,
@@ -124,7 +155,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
           vscode.workspace.asRelativePath(repository.rootUri.fsPath, false),
           alwaysShowPatterns,
         ),
-        evaluationError: remoteFailures.get(repository.rootUri.toString()),
+        evaluationError: remoteFailure(repository.rootUri.toString()),
       }, policy);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
@@ -138,9 +169,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
     onRepositoryOpened: () => visibility.requestRefresh(),
     onRepositoryChanged: evaluateRepository,
     onRepositoryClosed: repository => {
-      const key = repository.rootUri.toString();
-      actionability.delete(key);
-      remoteFailures.delete(key);
+      actionability.delete(repository.rootUri.toString());
       reconciler.removeRepository(repository);
       visibility.requestRefresh();
     },
@@ -172,12 +201,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
     },
     onSuccess: target => {
       const { repository } = target as RepositoryFetchTarget;
-      remoteFailures.delete(target.key);
       evaluateRepository(repository);
     },
     onError: target => {
       const { repository } = target as RepositoryFetchTarget;
-      remoteFailures.set(target.key, 'Remote refresh failed.');
       evaluateRepository(repository);
       // Built-in Git fetch errors can embed credential-bearing remote URLs, so
       // this boundary deliberately records no raw exception text.
@@ -185,6 +212,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
     },
   });
   context.subscriptions.push(fetchScheduler);
+  remoteFailure = key => fetchScheduler.hasFailed(key) ? 'Remote refresh failed.' : undefined;
   let fetchIntervalMilliseconds = readFetchIntervalMilliseconds();
   fetchScheduler.setInterval(fetchIntervalMilliseconds);
   if (fetchIntervalMilliseconds > 0) void fetchScheduler.refreshNow();
@@ -198,9 +226,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
       filteringActive: reconciler.enabled,
       compatible: reconciler.compatible,
       baselineEstablished: visibility.baselineEstablished,
+      nativeMappingState: visibility.mappingState,
       repositoryStates: [...actionability.values()],
       hiddenByRepoFocusCount: reconciler.hiddenRepositoryCount,
-      remoteFailureCount: remoteFailures.size,
+      remoteFailureCount: fetchScheduler.failureCount,
       policy,
       alwaysShowPatternCount: alwaysShowPatterns.length,
       fetchIntervalMinutes: fetchIntervalMilliseconds / 60_000,
@@ -227,6 +256,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
   context.subscriptions.push(
     vscode.commands.registerCommand('repofocus.toggle', async () => {
       await setFilteringEnabled(!filteringEnabled);
+      // Turning filtering on when it cannot run would otherwise look like a
+      // button that does nothing, with the reason only in copied diagnostics.
+      if (!filteringEnabled) return;
+      const explanation = describeMappingState(visibility.mappingState);
+      if (explanation) void vscode.window.showInformationMessage(explanation);
     }),
     vscode.commands.registerCommand('repofocus.refresh', async () => {
       logger.info('Manual refresh requested.');
@@ -241,15 +275,38 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
       await setFilteringEnabled(false);
     }),
     vscode.commands.registerCommand('repofocus.copyDiagnostics', copyDiagnostics),
+    vscode.commands.registerCommand('repofocus.revealAll', async () => {
+      // The only mechanism VS Code exposes for restoring an all-visible list,
+      // and it writes a setting — so it happens on an explicit act, disclosed.
+      const confirmed = await vscode.window.showWarningMessage(
+        'Reveal every repository in the Source Control Repositories view?',
+        {
+          modal: true,
+          detail: 'This changes VS Code\'s scm.repositories.selectionMode setting, which is the '
+            + 'only way VS Code offers to restore an all-visible repository list.',
+        },
+        'Reveal All',
+      );
+      if (confirmed !== 'Reveal All') return;
+      await vscode.commands.executeCommand(selectionModeCommands.single);
+      await new Promise(resolve => setTimeout(resolve, 250));
+      await vscode.commands.executeCommand(selectionModeCommands.multiple);
+      await new Promise(resolve => setTimeout(resolve, 250));
+      logger.info('Revealed all repositories through the native selection-mode transition.');
+      visibility.requestRefresh();
+      await visibility.waitForIdle();
+    }),
     vscode.workspace.onDidChangeConfiguration(event => {
+      // A selection-mode change can make filtering possible again.
+      if (event.affectsConfiguration('scm.repositories.selectionMode')) {
+        visibility.requestRefresh();
+      }
       if (!event.affectsConfiguration('repofocus')) return;
       policy = readPolicy();
       alwaysShowPatterns = readAlwaysShowPatterns();
       const nextFetchInterval = readFetchIntervalMilliseconds();
       fetchScheduler.setInterval(nextFetchInterval);
-      if (nextFetchInterval === 0) {
-        remoteFailures.clear();
-      } else if (nextFetchInterval !== fetchIntervalMilliseconds) {
+      if (nextFetchInterval > 0 && nextFetchInterval !== fetchIntervalMilliseconds) {
         void fetchScheduler.refreshNow();
       }
       fetchIntervalMilliseconds = nextFetchInterval;
@@ -284,7 +341,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
       await visibility.waitForIdle();
       await reconciler.shutdown();
       actionability.clear();
-      remoteFailures.clear();
       logger.info('RepoFocus stopped.', { clean: true });
     })();
     return shutdownPromise;
@@ -300,6 +356,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
     shutdown,
     waitForSettled,
   };
+}
+
+function describeMappingState(state: string): string | undefined {
+  switch (state) {
+    case 'awaiting-native-commands':
+      return 'RepoFocus is waiting for VS Code to create its internal repository-visibility '
+        + 'commands. Open the Source Control view once and filtering will start.';
+    case 'repositories-already-hidden':
+      return 'RepoFocus cannot filter while repositories are already hidden in the Source '
+        + 'Control Repositories view. Run RepoFocus: Reveal All Repositories in Source Control.';
+    case 'single-selection-mode':
+      return 'RepoFocus needs VS Code\'s repository selection mode set to "multiple".';
+    case 'incompatible':
+      return 'RepoFocus stopped filtering because VS Code\'s internal visibility commands '
+        + 'changed. Reload the window after checking RepoFocus: Copy Diagnostics.';
+    default:
+      return undefined;
+  }
 }
 
 function readPolicy(): ActionabilityPolicy {

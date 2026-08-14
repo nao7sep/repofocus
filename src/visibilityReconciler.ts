@@ -3,9 +3,14 @@ import type { RepositoryIdentity, VisibilityMapping } from './visibilityCommandR
 
 export type ToggleVisibility = (command: string) => Promise<void>;
 
+export interface VisibilityFailure {
+  /** Commands RepoFocus invoked to hide a repository and could not undo. */
+  readonly strandedCommandCount: number;
+}
+
 export interface VisibilityReconcilerOptions {
   readonly toggle: ToggleVisibility;
-  readonly onError?: (error: Error) => void;
+  readonly onError?: (error: Error, failure: VisibilityFailure) => void;
 }
 
 type ReconcilerState = 'active' | 'failed' | 'disposed';
@@ -18,10 +23,18 @@ function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
+/**
+ * Owns every native visibility mutation RepoFocus makes.
+ *
+ * Ownership is tracked by *command*, not by repository, because the mapping
+ * probe must toggle commands before it knows which repository each one belongs
+ * to. A command is the only thing RepoFocus can reliably undo, so it is the
+ * only thing recorded.
+ */
 export class VisibilityReconciler {
   private readonly actionability = new Map<string, RepositoryActionability>();
-  private readonly hiddenByRepoFocus = new Set<string>();
   private readonly mappings = new Map<string, VisibilityMapping>();
+  private readonly hiddenCommands = new Set<string>();
   private state: ReconcilerState = 'active';
   private filteringEnabled = false;
   private paused = false;
@@ -40,7 +53,30 @@ export class VisibilityReconciler {
   }
 
   get hiddenRepositoryCount(): number {
-    return this.hiddenByRepoFocus.size;
+    return this.hiddenCommands.size;
+  }
+
+  /**
+   * Executes a hide and records it before the command runs. A rejected toggle
+   * leaves the record in place so recovery retries it: a repository wrongly
+   * believed hidden is revealed again, while the opposite mistake would leave a
+   * changed repository invisible.
+   */
+  async hide(command: string): Promise<void> {
+    this.hiddenCommands.add(command);
+    await this.options.toggle(command);
+  }
+
+  async reveal(command: string): Promise<void> {
+    await this.options.toggle(command);
+    this.hiddenCommands.delete(command);
+  }
+
+  setMappings(mappings: readonly VisibilityMapping[]): void {
+    if (this.state !== 'active') return;
+    this.mappings.clear();
+    for (const mapping of mappings) this.mappings.set(repositoryKey(mapping.repository), mapping);
+    this.requestReconcile();
   }
 
   setFilteringEnabled(enabled: boolean): Promise<void> {
@@ -48,23 +84,9 @@ export class VisibilityReconciler {
     if (this.state === 'active') {
       this.requestReconcile();
     } else if (!enabled) {
-      this.queue = this.queue.then(() => this.restoreOwnedRepositories());
+      this.queue = this.queue.then(() => this.restoreOwnedCommands());
     }
     return this.queue;
-  }
-
-  replaceKnownVisibility(
-    mappings: readonly VisibilityMapping[],
-    hiddenRepositories: readonly RepositoryIdentity[],
-  ): void {
-    if (this.state !== 'active') return;
-    this.mappings.clear();
-    for (const mapping of mappings) this.mappings.set(repositoryKey(mapping.repository), mapping);
-    this.hiddenByRepoFocus.clear();
-    for (const repository of hiddenRepositories) {
-      this.hiddenByRepoFocus.add(repositoryKey(repository));
-    }
-    this.requestReconcile();
   }
 
   pause(): Promise<void> {
@@ -90,15 +112,21 @@ export class VisibilityReconciler {
   removeRepository(repository: RepositoryIdentity): void {
     const key = repositoryKey(repository);
     this.actionability.delete(key);
-    this.hiddenByRepoFocus.delete(key);
     this.mappings.delete(key);
   }
 
   isHiddenByRepoFocus(repository: RepositoryIdentity): boolean {
-    return this.hiddenByRepoFocus.has(repositoryKey(repository));
+    const mapping = this.mappings.get(repositoryKey(repository));
+    return mapping !== undefined && this.hiddenCommands.has(mapping.command);
   }
 
   waitForIdle(): Promise<void> {
+    return this.queue;
+  }
+
+  /** Restores everything RepoFocus hid without ending its own compatibility. */
+  restoreOwned(): Promise<void> {
+    this.queue = this.queue.then(() => this.restoreOwnedCommands());
     return this.queue;
   }
 
@@ -106,20 +134,9 @@ export class VisibilityReconciler {
     if (this.state !== 'active') return this.queue;
     this.state = 'failed';
     this.paused = false;
-    this.options.onError?.(asError(error));
     this.requested = false;
-    this.queue = this.queue.then(() => this.restoreOwnedRepositories());
-    return this.queue;
-  }
-
-  invalidateVisibility(error: unknown): Promise<void> {
-    if (this.state !== 'active') return this.queue;
-    this.state = 'failed';
-    this.paused = false;
-    this.options.onError?.(asError(error));
-    this.requested = false;
-    this.hiddenByRepoFocus.clear();
-    this.mappings.clear();
+    this.options.onError?.(asError(error), { strandedCommandCount: this.hiddenCommands.size });
+    this.queue = this.queue.then(() => this.restoreOwnedCommands());
     return this.queue;
   }
 
@@ -129,7 +146,7 @@ export class VisibilityReconciler {
     this.paused = false;
     this.requested = false;
     await this.queue;
-    await this.restoreOwnedRepositories();
+    await this.restoreOwnedCommands();
     this.actionability.clear();
     this.mappings.clear();
   }
@@ -156,24 +173,17 @@ export class VisibilityReconciler {
     for (const [key, mapping] of this.mappings) {
       if (this.state !== 'active' || this.paused) return;
       const value = this.actionability.get(key);
-      const hidden = this.hiddenByRepoFocus.has(key);
       const shouldBeHidden = this.filteringEnabled && value?.actionable === false;
-      if (shouldBeHidden && !hidden) {
-        try {
-          await this.options.toggle(mapping.command);
-          this.hiddenByRepoFocus.add(key);
-        } catch (error) {
-          await this.handleToggleFailure(error);
-          return;
+      if (shouldBeHidden === this.hiddenCommands.has(mapping.command)) continue;
+      try {
+        if (shouldBeHidden) {
+          await this.hide(mapping.command);
+        } else {
+          await this.reveal(mapping.command);
         }
-      } else if (!shouldBeHidden && hidden) {
-        try {
-          await this.options.toggle(mapping.command);
-          this.hiddenByRepoFocus.delete(key);
-        } catch (error) {
-          await this.handleToggleFailure(error);
-          return;
-        }
+      } catch (error) {
+        await this.handleToggleFailure(error);
+        return;
       }
     }
   }
@@ -181,24 +191,21 @@ export class VisibilityReconciler {
   private async handleToggleFailure(error: unknown): Promise<void> {
     if (this.state === 'active') {
       this.state = 'failed';
-      this.options.onError?.(asError(error));
+      this.options.onError?.(asError(error), { strandedCommandCount: this.hiddenCommands.size });
     }
     this.requested = false;
-    await this.restoreOwnedRepositories();
+    await this.restoreOwnedCommands();
   }
 
-  private async restoreOwnedRepositories(): Promise<void> {
-    for (const key of [...this.hiddenByRepoFocus]) {
-      const mapping = this.mappings.get(key);
-      if (!mapping) continue;
+  private async restoreOwnedCommands(): Promise<void> {
+    for (const command of [...this.hiddenCommands]) {
       try {
-        await this.options.toggle(mapping.command);
-        this.hiddenByRepoFocus.delete(key);
+        await this.reveal(command);
       } catch (error) {
-        this.options.onError?.(new Error('Failed to restore a repository hidden by RepoFocus.', {
-          cause: asError(error),
-        }));
-        // Retain the key so a later explicit recovery attempt can retry it.
+        this.options.onError?.(
+          new Error('Failed to restore a repository hidden by RepoFocus.', { cause: asError(error) }),
+          { strandedCommandCount: this.hiddenCommands.size },
+        );
       }
     }
   }

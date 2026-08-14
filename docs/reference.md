@@ -27,16 +27,21 @@ A detached HEAD, unborn branch, or local-only branch is not remote work by itsel
 
 `repofocus.minimumRepositoryCount` defaults to `2`. RepoFocus shows every repository and does not initialize native filtering while fewer repositories are detected. Set it to `1` only if a clean single-repository workspace should be filtered too.
 
-VS Code's native `scm.repositories.visible` setting must be at least the number of monitored repositories, including clean ones. RepoFocus contributes a default of 100; an explicit user or workspace value still takes precedence. RepoFocus needs a known all-visible baseline to distinguish its own visibility changes from pre-existing native state.
+`scm.repositories.visible` is irrelevant to RepoFocus. It sizes the Source Control Repositories section and places no cap on which repositories can be visible, so RepoFocus neither reads it nor contributes a default for it.
 
-RepoFocus also requires VS Code's `multiple` repository-selection mode. It never changes the active sidebar pane. After the user opens Source Control, VS Code registers the internal repository-visibility commands; RepoFocus then uses the native selection-mode commands to switch through `single` and back to `multiple`, verifies native repository mappings, and reconciles directly from the resulting known visibility state without an intermediate restore-to-all cycle.
+RepoFocus requires VS Code's `multiple` repository-selection mode, which is VS Code's default. It reads that setting and declines to filter while it is `single`, recovering by itself when the value changes back. RepoFocus writes no VS Code configuration.
+
+It never changes the active sidebar pane. After the user opens Source Control, VS Code registers the internal repository-visibility commands; RepoFocus then maps each one to its repository by reversibly hiding the focused repository and reading which repository receives focus. When no remaining command moves focus, one repository is still visible and its command is the single unmapped one, by elimination.
+
+That elimination needs every repository visible at the start. If repositories were already hidden, more than one command is left unmapped and RepoFocus cannot identify them: a hidden repository never holds focus, and revealing one produces no observable event. RepoFocus reports this instead of guessing.
 
 ## Commands
 
-- **RepoFocus: Toggle Filtering** enables or disables automatic filtering.
+- **RepoFocus: Toggle Filtering** enables or disables automatic filtering. Turning it on while filtering cannot run — Source Control has not been opened, repositories are already hidden, the selection mode is `single`, or compatibility was lost — reports which of those it is rather than appearing to do nothing.
 - **RepoFocus: Refresh** fetches eligible remotes, reevaluates every repository, and reconciles visibility.
 - **RepoFocus: Show All Repositories** disables filtering and restores repositories hidden by RepoFocus.
-- **RepoFocus: Copy Diagnostics** copies versions, aggregate counts, effective policy, and compatibility state without repository identifiers or Git content.
+- **RepoFocus: Copy Diagnostics** copies versions, aggregate counts, effective policy, and compatibility state without repository identifiers or Git content. Its `nativeMappingState` field distinguishes a mapped session from one waiting for Source Control to be opened, one declining because repositories are already hidden or the selection mode is `single`, and one that has lost compatibility.
+- **RepoFocus: Reveal All Repositories in Source Control** restores an all-visible repository list when some are hidden, after confirming that it changes VS Code's `scm.repositories.selectionMode` setting — the only mechanism VS Code offers for this, and the one place RepoFocus writes configuration.
 
 The filtering toggle is workspace presentation state and survives normal VS Code reloads. Internal command mappings are discovered again each time RepoFocus activates.
 
@@ -50,4 +55,6 @@ Authentication remains in the existing Git and VS Code flow. A fetch failure doe
 
 RepoFocus records only the repositories it hides. Disabling filtering, running **Show All Repositories**, losing compatibility, and extension shutdown all restore that owned set without closing Git repositories.
 
-If compatibility validation fails, first ensure `scm.repositories.visible` is high enough for the workspace, then reload the VS Code window. Run **RepoFocus: Copy Diagnostics** and **RepoFocus: Show All Repositories** before reporting a failure. A VS Code update can change the internal visibility commands even when the public Git API remains compatible; report the copied diagnostics at [GitHub Issues](https://github.com/nao7sep/repofocus/issues).
+If compatibility validation fails, run **RepoFocus: Copy Diagnostics**, then reload the VS Code window; a compatibility failure lasts for the life of the window by design. **RepoFocus: Show All Repositories** is offered as a recovery action only when repositories are actually still hidden, so a failure notification without it means nothing was left hidden.
+
+A VS Code update can change the internal visibility commands even when the public Git API remains compatible. RepoFocus detects and reports a change to the surrounding command family, but it cannot detect a rename of the per-repository commands themselves: VS Code registers those lazily, so their absence is indistinguishable from a Source Control view that has not been opened yet. In that case filtering silently does nothing, `nativeMappingState` reads `awaiting-native-commands`, and the output channel records the wait. Report the copied diagnostics at [GitHub Issues](https://github.com/nao7sep/repofocus/issues).

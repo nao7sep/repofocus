@@ -48,7 +48,6 @@
   },
   "contributes": {
     "configurationDefaults": {
-      "scm.repositories.visible": 100,
       "scm.repositories.selectionMode": "multiple"
     },
     "commands": [
@@ -72,6 +71,11 @@
       {
         "command": "repofocus.copyDiagnostics",
         "title": "Copy Diagnostics",
+        "category": "RepoFocus"
+      },
+      {
+        "command": "repofocus.revealAll",
+        "title": "Reveal All Repositories in Source Control",
         "category": "RepoFocus"
       }
     ],

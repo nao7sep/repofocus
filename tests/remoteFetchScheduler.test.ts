@@ -8,6 +8,42 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 describe('RemoteFetchScheduler', () => {
+  it('clears a failure when the repository stops being a fetch target', async () => {
+    let targets: RemoteFetchTarget[] = [
+      { key: 'alpha', fetch: () => Promise.reject(new Error('offline')) },
+      { key: 'beta', fetch: () => Promise.resolve() },
+    ];
+    const scheduler = new RemoteFetchScheduler({ getTargets: () => targets });
+
+    await scheduler.refreshNow();
+    expect(scheduler.hasFailed('alpha')).toBe(true);
+    expect(scheduler.hasFailed('beta')).toBe(false);
+    expect(scheduler.failureCount).toBe(1);
+
+    // Fetching disabled, the last remote removed, or the repository closed:
+    // whichever it was, nothing can ever clear the failure by fetching again.
+    targets = [];
+    expect(scheduler.hasFailed('alpha')).toBe(false);
+    expect(scheduler.failureCount).toBe(0);
+    scheduler.dispose();
+  });
+
+  it('clears a failure after a later successful fetch', async () => {
+    let fail = true;
+    const targets: RemoteFetchTarget[] = [
+      { key: 'alpha', fetch: () => fail ? Promise.reject(new Error('offline')) : Promise.resolve() },
+    ];
+    const scheduler = new RemoteFetchScheduler({ getTargets: () => targets });
+
+    await scheduler.refreshNow();
+    expect(scheduler.hasFailed('alpha')).toBe(true);
+
+    fail = false;
+    await scheduler.refreshNow();
+    expect(scheduler.hasFailed('alpha')).toBe(false);
+    scheduler.dispose();
+  });
+
   it('bounds concurrency and fetches every target', async () => {
     let active = 0;
     let maximum = 0;

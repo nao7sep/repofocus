@@ -8,6 +8,8 @@ export interface RepoFocusDiagnosticsInput {
   readonly filteringActive: boolean;
   readonly compatible: boolean;
   readonly baselineEstablished: boolean;
+  /** Tells "waiting for Source Control to be opened" from "mapping is broken". */
+  readonly nativeMappingState: string;
   readonly repositoryStates: readonly RepositoryActionability[];
   readonly hiddenByRepoFocusCount: number;
   readonly remoteFailureCount: number;
@@ -34,6 +36,7 @@ export function createDiagnostics(input: RepoFocusDiagnosticsInput): string {
     filteringActive: input.filteringActive,
     compatible: input.compatible,
     baselineEstablished: input.baselineEstablished,
+    nativeMappingState: input.nativeMappingState,
     repositoryCount: input.repositoryStates.length,
     actionableRepositoryCount: input.repositoryStates.filter(state => state.actionable).length,
     hiddenByRepoFocusCount: input.hiddenByRepoFocusCount,

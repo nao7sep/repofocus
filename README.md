@@ -15,9 +15,10 @@ RepoFocus is a Preview VS Code extension for people who work in a parent folder 
 
 - VS Code 1.131.0 or newer on desktop, with the built-in Git extension enabled.
 - A trusted local workspace. Virtual and untrusted workspaces are not supported.
-- RepoFocus raises the default for VS Code's `scm.repositories.visible` setting to 100 so every monitored repository can participate. An explicit lower setting still takes precedence; RepoFocus fails safe without filtering if that cap is below the repository count.
 - Filtering starts at two detected repositories by default, so opening one specific repository always leaves it visible. `repofocus.minimumRepositoryCount` can change that threshold.
-- RepoFocus uses VS Code's `multiple` repository-selection mode. During initialization, the native repository list makes one visible transition while RepoFocus verifies the repository mappings and applies the final filter.
+- VS Code's repository selection mode must be `multiple`, which is its default. RepoFocus reads that setting and stays out of the way when it is `single`; it never writes VS Code configuration on its own.
+- Every repository must be visible in the Source Control Repositories view when RepoFocus starts filtering. If any are already hidden it says so and offers **RepoFocus: Reveal All Repositories in Source Control** rather than guessing, because VS Code gives an extension no way to tell which repositories are hidden.
+- During initialization the native repository list makes one visible transition while RepoFocus verifies the repository mappings and applies the final filter.
 - RepoFocus never opens, closes, focuses, or switches sidebar panes. VS Code creates the internal repository-visibility commands lazily, so RepoFocus waits quietly until the user first opens Source Control and then initializes filtering in place.
 - Automatic remote detection performs Git fetches and can therefore invoke the authentication flow configured for Git and VS Code.
 
@@ -40,6 +41,8 @@ In VS Code, run **Extensions: Install from VSIX...** and select the generated pa
 VS Code does not expose repository visibility through its public extension API. RepoFocus isolates its use of the built-in Source Control visibility commands behind validation and restores its own visibility changes if that validation or a later command fails. It never closes a clean repository and treats uncertain or failed state evaluation as actionable.
 
 The native visibility menu does not publish enough state for RepoFocus to observe every manual visibility change made after filtering starts. Use **RepoFocus: Toggle Filtering** or **RepoFocus: Show All Repositories** while RepoFocus is active; native manual visibility behavior is preserved when filtering is disabled.
+
+One compatibility limitation is worth stating plainly: VS Code creates the internal per-repository visibility commands only after Source Control has been opened, so an extension cannot distinguish "the view has not been opened yet" from "these commands were renamed by a VS Code update". RepoFocus reports which state it is in through **RepoFocus: Copy Diagnostics** and its output channel rather than pretending to know. A change to the surrounding command family *is* detected and reported as a compatibility failure.
 
 ## Documentation
 

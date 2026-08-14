@@ -11,6 +11,7 @@ describe('createDiagnostics', () => {
       filteringActive: true,
       compatible: true,
       baselineEstablished: true,
+      nativeMappingState: 'mapped',
       repositoryStates: [
         { actionable: false, reasons: [] },
         { actionable: true, reasons: [{ kind: 'unstaged', count: 2 }] },

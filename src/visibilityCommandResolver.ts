@@ -16,9 +16,22 @@ export class VisibilityCompatibilityError extends Error {
   }
 }
 
+export const selectionModeCommandPrefix = 'workbench.scm.action.repositories.setSelectionMode.';
+
+/**
+ * VS Code registers these eagerly at startup, unlike the per-repository
+ * visibility commands, which appear only once Source Control has been rendered.
+ * Their absence therefore means the internal command family moved; their
+ * presence says nothing about whether the view has been opened yet.
+ */
+export const selectionModeCommands = {
+  single: `${selectionModeCommandPrefix}single`,
+  multiple: `${selectionModeCommandPrefix}multiple`,
+} as const;
+
 export type VisibilityCommandDiscovery =
   | { readonly kind: 'ready'; readonly commands: readonly string[] }
-  | { readonly kind: 'pending' | 'excess'; readonly commandCount: number };
+  | { readonly kind: 'pending' | 'excess' | 'unsupported'; readonly commandCount: number };
 
 function commandHandle(command: string): number | undefined {
   if (!command.startsWith(visibilityCommandPrefix)) {
@@ -43,6 +56,9 @@ export function discoverVisibilityCommands(
   commands: readonly string[],
 ): VisibilityCommandDiscovery {
   const candidates = findVisibilityCommands(commands);
+  if (!commands.includes(selectionModeCommands.multiple)) {
+    return { kind: 'unsupported', commandCount: candidates.length };
+  }
   if (candidates.length === repositoryCount) return { kind: 'ready', commands: candidates };
   return {
     kind: candidates.length < repositoryCount ? 'pending' : 'excess',

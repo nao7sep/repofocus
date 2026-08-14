@@ -19,6 +19,26 @@ export class RemoteFetchScheduler implements DisposableLike {
   private requested = false;
   private disposed = false;
   private readonly concurrency: number;
+  private readonly failures = new Set<string>();
+
+  /**
+   * The last attempt's outcome per target, owned here rather than in a parallel
+   * map, so a target that disappears — fetching disabled, the last remote
+   * removed, the repository closed — cannot leave behind a failure nothing can
+   * clear. Membership is re-derived from the live target set on every read.
+   */
+  hasFailed(key: string): boolean {
+    if (!this.failures.has(key)) return false;
+    if (this.options.getTargets().some(target => target.key === key)) return true;
+    this.failures.delete(key);
+    return false;
+  }
+
+  get failureCount(): number {
+    const live = new Set(this.options.getTargets().map(target => target.key));
+    for (const key of [...this.failures]) if (!live.has(key)) this.failures.delete(key);
+    return this.failures.size;
+  }
 
   constructor(private readonly options: RemoteFetchSchedulerOptions) {
     const concurrency = options.concurrency ?? 2;
@@ -73,8 +93,10 @@ export class RemoteFetchScheduler implements DisposableLike {
           if (!target) return;
           try {
             await target.fetch();
+            this.failures.delete(target.key);
             if (!this.disposed) this.options.onSuccess?.(target);
           } catch (error) {
+            this.failures.add(target.key);
             if (!this.disposed) this.options.onError?.(target, error);
           }
         }

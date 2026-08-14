@@ -157,11 +157,19 @@ export async function run(): Promise<void> {
   );
   assert.equal(api.git.repositories.length, before, 'Hiding must not remove repositories from the Git API.');
   await vscode.commands.executeCommand('repofocus.copyDiagnostics');
-  const diagnostics = JSON.parse(await vscode.env.clipboard.readText()) as { repositoryCount?: number };
+  const diagnostics = JSON.parse(await vscode.env.clipboard.readText()) as {
+    repositoryCount?: number;
+    nativeMappingState?: string;
+  };
   assert.equal(
     diagnostics.repositoryCount,
     expectedRepositoryCount,
     'Copied diagnostics must summarize every monitored repository.',
+  );
+  assert.equal(
+    diagnostics.nativeMappingState,
+    'mapped',
+    'Diagnostics must distinguish a mapped session from one that is merely waiting.',
   );
 
   await appendFile(join(updaterPath, 'tracked.txt'), 'incoming\n', 'utf8');
@@ -287,6 +295,21 @@ export async function run(): Promise<void> {
   await api.waitForSettled();
   assert.equal(api.isHiddenByRepoFocus(reopenedAlpha), true, 'The clean repository must hide when filtering resumes.');
   assert.equal(api.isHiddenByRepoFocus(beta), false, 'The actionable repository must remain visible when filtering resumes.');
+
+  // The headline safety property: RepoFocus reaches and keeps a filtered view
+  // without ever writing VS Code's own configuration.
+  const selectionMode = vscode.workspace.getConfiguration('scm')
+    .inspect<string>('repositories.selectionMode');
+  assert.equal(
+    selectionMode?.globalValue,
+    undefined,
+    'RepoFocus must never write scm.repositories.selectionMode to user settings.',
+  );
+  assert.equal(
+    selectionMode?.workspaceValue,
+    undefined,
+    'RepoFocus must never write scm.repositories.selectionMode to workspace settings.',
+  );
 
   await api.shutdown();
   await api.shutdown();

@@ -1,20 +1,38 @@
 import type { GitRepository } from './gitApi';
-import type { RepositoryIdentity, VisibilityMapping } from './visibilityCommandResolver';
+import type { VisibilityMapping } from './visibilityCommandResolver';
 
-export class VisibilityBaselineError extends Error {
-  constructor(
-    message: string,
-    readonly recoveredToAllVisible: boolean,
-    options?: ErrorOptions,
-  ) {
+export class VisibilityProbeError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
     super(message, options);
-    this.name = 'VisibilityBaselineError';
+    this.name = 'VisibilityProbeError';
   }
 }
 
-export interface VisibilityBaseline {
-  readonly mappings: readonly VisibilityMapping[];
-  readonly hiddenRepositories: readonly RepositoryIdentity[];
+/**
+ * Repositories were hidden in the native Repositories view before RepoFocus
+ * mapped, so they cannot be identified: focus transfer is the only signal VS
+ * Code offers, a hidden repository can never hold focus, and revealing one
+ * produces no observable event. Measured in the Extension Host, not assumed.
+ */
+export class RepositoriesAlreadyHiddenError extends Error {
+  constructor(readonly unmappedCommandCount: number) {
+    super(
+      `${unmappedCommandCount} repositories are already hidden in the Source Control Repositories view, `
+      + 'so RepoFocus cannot identify them.',
+    );
+    this.name = 'RepositoriesAlreadyHiddenError';
+  }
+}
+
+/** The owner of every visibility mutation the probe makes. */
+export interface VisibilityProbeLedger {
+  hide(command: string): Promise<void>;
+  reveal(command: string): Promise<void>;
+}
+
+export interface VisibilityProbeTimings {
+  readonly probeMilliseconds?: number;
+  readonly selectionTimeoutMilliseconds?: number;
 }
 
 function selectedRepository(repositories: readonly GitRepository[]): GitRepository | undefined {
@@ -32,7 +50,7 @@ async function waitForSelectedRepository(
     if (selected) return selected;
     await new Promise(resolve => setTimeout(resolve, 10));
   } while (Date.now() < deadline);
-  throw new VisibilityBaselineError('Native repository focus did not settle.', false);
+  throw new VisibilityProbeError('Native repository focus did not settle.');
 }
 
 async function waitForDifferentSelection(
@@ -49,95 +67,67 @@ async function waitForDifferentSelection(
   }
 }
 
-export interface VisibilityBaselineTimings {
-  readonly modeSettleMilliseconds?: number;
-  readonly probeMilliseconds?: number;
-  readonly selectionTimeoutMilliseconds?: number;
-}
-
-async function revealAllRepositories(
-  execute: (command: string) => Promise<void>,
-  settleMilliseconds: number,
-): Promise<void> {
-  await execute('workbench.scm.action.repositories.setSelectionMode.single');
-  await new Promise(resolve => setTimeout(resolve, settleMilliseconds));
-  await execute('workbench.scm.action.repositories.setSelectionMode.multiple');
-  await new Promise(resolve => setTimeout(resolve, settleMilliseconds));
-}
-
-export async function establishVisibilityBaseline(
+/**
+ * Maps every internal visibility command to its repository from whatever
+ * visibility state the view is already in, writing no VS Code configuration.
+ *
+ * Each round hides the focused repository and reads which repository receives
+ * focus. When no remaining command moves focus, exactly one repository is still
+ * visible; its command is the single unmapped one, by elimination. More than one
+ * unmapped command means repositories were hidden before RepoFocus started —
+ * an unmappable state, reported rather than guessed at.
+ */
+export async function probeVisibilityMappings(
   repositories: readonly GitRepository[],
   candidateCommands: readonly string[],
-  execute: (command: string) => Promise<void>,
-  timings: VisibilityBaselineTimings = {},
-): Promise<VisibilityBaseline> {
-  const modeSettleMilliseconds = timings.modeSettleMilliseconds ?? 250;
+  ledger: VisibilityProbeLedger,
+  timings: VisibilityProbeTimings = {},
+): Promise<readonly VisibilityMapping[]> {
   const probeMilliseconds = timings.probeMilliseconds ?? 0;
   const selectionTimeoutMilliseconds = timings.selectionTimeoutMilliseconds ?? 1_000;
-  try {
-    await revealAllRepositories(execute, modeSettleMilliseconds);
+  const remainingCommands = [...candidateCommands];
+  const mappings: VisibilityMapping[] = [];
 
-    const remainingCommands = [...candidateCommands];
-    const mappings: VisibilityMapping[] = [];
-    while (remainingCommands.length > 1) {
-      const current = await waitForSelectedRepository(repositories, selectionTimeoutMilliseconds);
-      const currentKey = current.rootUri.toString();
-      let matchedIndex = -1;
-      for (let index = 0; index < remainingCommands.length; index += 1) {
-        const command = remainingCommands[index];
-        await execute(command);
-        // Native focus is updated before executeCommand resolves. Avoid a timer
-        // here so the reversible probes are not painted one by one.
-        if (await waitForDifferentSelection(repositories, currentKey, probeMilliseconds)) {
-          mappings.push({ repository: current, command });
-          matchedIndex = index;
-          break;
-        }
-        await execute(command);
+  while (remainingCommands.length > 0) {
+    const current = await waitForSelectedRepository(repositories, selectionTimeoutMilliseconds);
+    const currentKey = current.rootUri.toString();
+    let matchedIndex = -1;
+    for (let index = 0; index < remainingCommands.length; index += 1) {
+      const command = remainingCommands[index];
+      await ledger.hide(command);
+      // Native focus is updated before executeCommand resolves. Avoid a timer
+      // here so the reversible probes are not painted one by one.
+      if (await waitForDifferentSelection(repositories, currentKey, probeMilliseconds)) {
+        mappings.push({ repository: current, command });
+        matchedIndex = index;
+        break;
       }
-      if (matchedIndex === -1) {
-        throw new VisibilityBaselineError(
-          'No native visibility command matched the focused repository.',
-          false,
-        );
-      }
-      remainingCommands.splice(matchedIndex, 1);
+      await ledger.reveal(command);
     }
+    // No command moved focus: the focused repository is the only visible one.
+    if (matchedIndex === -1) break;
+    remainingCommands.splice(matchedIndex, 1);
+  }
 
-    const finalRepository = await waitForSelectedRepository(
-      repositories,
-      selectionTimeoutMilliseconds,
-    );
-    if (remainingCommands.length !== 1) {
-      throw new VisibilityBaselineError(
-        'Every Git repository must have exactly one native visibility command.',
-        false,
-      );
-    }
-    mappings.push({ repository: finalRepository, command: remainingCommands[0] });
-
-    return {
-      mappings,
-      hiddenRepositories: mappings.slice(0, -1).map(mapping => mapping.repository),
-    };
-  } catch (error) {
-    let recoveryError: unknown;
-    try {
-      await revealAllRepositories(execute, modeSettleMilliseconds);
-    } catch (recoveryFailure) {
-      recoveryError = recoveryFailure;
-    }
-
-    const message = error instanceof VisibilityBaselineError
-      ? error.message
-      : 'Failed to map every repository in VS Code\'s native Repositories view.';
-    if (recoveryError === undefined) {
-      throw new VisibilityBaselineError(message, true, { cause: error });
-    }
-    throw new VisibilityBaselineError(
-      `${message} RepoFocus could not restore the native all-visible state.`,
-      false,
-      { cause: new AggregateError([error, recoveryError], 'Visibility mapping and recovery failed.') },
+  if (remainingCommands.length === 0) {
+    // Every command was consumed while a repository is still visible, so the
+    // command set and the repository set do not describe the same thing.
+    throw new VisibilityProbeError(
+      'Every Git repository must be mapped to exactly one native visibility command.',
     );
   }
+  if (remainingCommands.length > 1) {
+    throw new RepositoriesAlreadyHiddenError(remainingCommands.length);
+  }
+
+  const lastVisible = await waitForSelectedRepository(repositories, selectionTimeoutMilliseconds);
+  mappings.push({ repository: lastVisible, command: remainingCommands[0] });
+
+  const mappedRepositories = new Set(mappings.map(mapping => mapping.repository.rootUri.toString()));
+  if (mappedRepositories.size !== mappings.length || mappings.length !== repositories.length) {
+    throw new VisibilityProbeError(
+      'Every Git repository must be mapped to exactly one native visibility command.',
+    );
+  }
+  return mappings;
 }

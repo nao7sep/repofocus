@@ -30,12 +30,6 @@ async function createRepository(name) {
 }
 
 try {
-  await mkdir(join(fixtureRoot, '.vscode'));
-  await writeFile(
-    join(fixtureRoot, '.vscode', 'settings.json'),
-    `${JSON.stringify({ 'scm.repositories.visible': 20 }, undefined, 2)}\n`,
-    'utf8',
-  );
   await createRepository('alpha');
   await createRepository('beta');
   for (let index = 3; index <= 15; index += 1) {
