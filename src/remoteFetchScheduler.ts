@@ -2,6 +2,14 @@ import type { DisposableLike } from './gitApi';
 
 export interface RemoteFetchTarget {
   readonly key: string;
+  /**
+   * Whether this exact target still exists. The key alone cannot answer it: a
+   * repository can close and reopen at the same URI while its fetch is in
+   * flight, and the replacement is a different object wearing the same key.
+   * Callers that can distinguish the two supply this; the rest fall back to key
+   * membership.
+   */
+  isLive?(): boolean;
   fetch(): Promise<void>;
 }
 
@@ -19,24 +27,27 @@ export class RemoteFetchScheduler implements DisposableLike {
   private requested = false;
   private disposed = false;
   private readonly concurrency: number;
-  private readonly failures = new Set<string>();
-
   /**
-   * The last attempt's outcome per target, owned here rather than in a parallel
-   * map, so a target that disappears — fetching disabled, the last remote
-   * removed, the repository closed — cannot leave behind a failure nothing can
-   * clear. Membership is re-derived from the live target set on every read.
+   * The last attempt's outcome, held against the target that produced it rather
+   * than against its key alone. A key names a repository URI, and a repository
+   * can close and reopen at that URI: keying by it would hand the replacement
+   * its predecessor's failure. The stored target answers its own liveness
+   * through the same rule that governs completions.
    */
+  private readonly failures = new Map<string, RemoteFetchTarget>();
+
   hasFailed(key: string): boolean {
-    if (!this.failures.has(key)) return false;
-    if (this.options.getTargets().some(target => target.key === key)) return true;
+    const failed = this.failures.get(key);
+    if (!failed) return false;
+    if (this.isLive(failed)) return true;
     this.failures.delete(key);
     return false;
   }
 
   get failureCount(): number {
-    const live = new Set(this.options.getTargets().map(target => target.key));
-    for (const key of [...this.failures]) if (!live.has(key)) this.failures.delete(key);
+    for (const [key, failed] of [...this.failures]) {
+      if (!this.isLive(failed)) this.failures.delete(key);
+    }
     return this.failures.size;
   }
 
@@ -93,11 +104,16 @@ export class RemoteFetchScheduler implements DisposableLike {
           if (!target) return;
           try {
             await target.fetch();
+            // A dead target records nothing: its key may already name a
+            // different repository, and attributing this result to that one
+            // would be worse than having no result at all.
+            if (this.disposed || !this.isLive(target)) continue;
             this.failures.delete(target.key);
-            if (!this.disposed && this.isLive(target)) this.options.onSuccess?.(target);
+            this.options.onSuccess?.(target);
           } catch (error) {
-            this.failures.add(target.key);
-            if (!this.disposed && this.isLive(target)) this.options.onError?.(target, error);
+            if (this.disposed || !this.isLive(target)) continue;
+            this.failures.set(target.key, target);
+            this.options.onError?.(target, error);
           }
         }
       };
@@ -111,6 +127,7 @@ export class RemoteFetchScheduler implements DisposableLike {
    * completion would resurrect it in the caller's state.
    */
   private isLive(target: RemoteFetchTarget): boolean {
+    if (target.isLive) return target.isLive();
     return this.options.getTargets().some(candidate => candidate.key === target.key);
   }
 

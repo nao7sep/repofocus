@@ -123,7 +123,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
       } else if (reason === 'other-scm-providers') {
         void vscode.window.showWarningMessage(
           'RepoFocus only supports workspaces where every Source Control provider is a Git '
-          + 'repository, and another provider is active. Filtering is paused, not broken.',
+          + 'repository, and another provider is active. Filtering is paused, not broken — run '
+          + 'RepoFocus: Refresh once that provider is gone.',
         );
       } else if (reason === 'single-selection-mode') {
         void vscode.window.showWarningMessage(
@@ -201,6 +202,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
         .map((repository): RepositoryFetchTarget => ({
           key: repository.rootUri.toString(),
           repository,
+          // Identity, not URI: a reopened repository is a new Git API object.
+          isLive: () => git.repositories.includes(repository),
           fetch: () => repository.fetch(),
         }));
     },
@@ -273,6 +276,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
       alwaysShowPatterns = readAlwaysShowPatterns();
       await fetchScheduler.refreshNow();
       evaluateAll();
+      visibility.retryIfUnavailable();
       await waitForSettled();
     }),
     vscode.commands.registerCommand('repofocus.showAll', async () => {
@@ -375,7 +379,7 @@ function describeMappingState(state: string): string | undefined {
       return 'RepoFocus needs VS Code\'s repository selection mode set to "multiple".';
     case 'other-scm-providers':
       return 'RepoFocus only supports workspaces where every Source Control provider is a Git '
-        + 'repository, and another provider is active.';
+        + 'repository, and another provider is active. Run RepoFocus: Refresh once it is gone.';
     case 'incompatible':
       return 'RepoFocus stopped filtering because VS Code\'s internal visibility commands '
         + 'changed. Reload the window after checking RepoFocus: Copy Diagnostics.';

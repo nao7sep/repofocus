@@ -73,6 +73,17 @@ export class VisibilityMappingCoordinator {
     this.queueRefresh(true, true);
   }
 
+  /**
+   * The user-driven retry for conditions RepoFocus cannot observe changing:
+   * another extension's Source Control provider disappearing, or repositories
+   * being revealed through VS Code's own menu. Neither produces an event, so a
+   * manual refresh is the retry rather than a background poll.
+   */
+  retryIfUnavailable(): void {
+    if (this.mappingState === 'mapped') return;
+    this.requestRefresh();
+  }
+
   private queueRefresh(settleTopology: boolean, resetCommandWait: boolean): void {
     if (this.disposed || !this.options.reconciler.compatible) return;
     this.revision += 1;

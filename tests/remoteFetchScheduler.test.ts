@@ -54,6 +54,68 @@ describe('RemoteFetchScheduler', () => {
     scheduler.dispose();
   });
 
+  it('does not report a completion for a target replaced at the same key', async () => {
+    const gate = deferred();
+    const onSuccess = vi.fn();
+    const onError = vi.fn();
+    // A repository closes and reopens at the same URI mid-fetch: same key,
+    // different object. Reporting the old result would describe the new one.
+    let closed = false;
+    const original: RemoteFetchTarget = {
+      key: 'file:///alpha',
+      isLive: () => !closed,
+      fetch: () => gate.promise,
+    };
+    const replacement: RemoteFetchTarget = {
+      key: 'file:///alpha',
+      isLive: () => true,
+      fetch: () => Promise.resolve(),
+    };
+    let targets: RemoteFetchTarget[] = [original];
+    const scheduler = new RemoteFetchScheduler({
+      getTargets: () => targets,
+      onSuccess,
+      onError,
+    });
+
+    const run = scheduler.refreshNow();
+    closed = true;
+    targets = [replacement];
+    gate.resolve();
+    await run;
+
+    expect(onSuccess).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    expect(scheduler.hasFailed('file:///alpha')).toBe(false);
+    scheduler.dispose();
+  });
+
+  it('does not attribute a stored failure to the repository that replaced the failed one', async () => {
+    let closed = false;
+    const original: RemoteFetchTarget = {
+      key: 'file:///alpha',
+      isLive: () => !closed,
+      fetch: () => Promise.reject(new Error('offline')),
+    };
+    const replacement: RemoteFetchTarget = {
+      key: 'file:///alpha',
+      isLive: () => true,
+      fetch: () => Promise.resolve(),
+    };
+    let targets: RemoteFetchTarget[] = [original];
+    const scheduler = new RemoteFetchScheduler({ getTargets: () => targets });
+
+    await scheduler.refreshNow();
+    expect(scheduler.hasFailed('file:///alpha')).toBe(true);
+
+    // Same URI, different repository: the failure belongs to its predecessor.
+    closed = true;
+    targets = [replacement];
+    expect(scheduler.hasFailed('file:///alpha')).toBe(false);
+    expect(scheduler.failureCount).toBe(0);
+    scheduler.dispose();
+  });
+
   it('clears a failure after a later successful fetch', async () => {
     let fail = true;
     const targets: RemoteFetchTarget[] = [

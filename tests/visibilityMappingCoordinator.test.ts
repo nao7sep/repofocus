@@ -359,6 +359,49 @@ describe('VisibilityMappingCoordinator', () => {
     expect(reconciler.hiddenRepositoryCount).toBe(2);
   });
 
+  it('retries an unavailable state on manual refresh and leaves a mapped one alone', async () => {
+    const native = nativeRepositories(['alpha', 'beta']);
+    const execute = vi.fn(native.execute);
+    const reconciler = new VisibilityReconciler({ toggle: execute });
+    for (const repository of native.repositories) reconciler.setActionability(repository, clean);
+    let extraProvider = true;
+    let commandReads = 0;
+    const coordinator = new VisibilityMappingCoordinator({
+      filteringRequested: () => true,
+      getCommands: () => {
+        commandReads += 1;
+        return Promise.resolve(extraProvider
+          ? [...native.discoveryCommands, `${visibilityCommandPrefix}scm9`]
+          : native.discoveryCommands);
+      },
+      getRepositories: () => native.repositories,
+      multipleSelectionMode: () => true,
+      minimumRepositoryCount: () => 2,
+      reconciler,
+      commandRetryAttempts: 1,
+      probeTimings: { probeMilliseconds: 1, selectionTimeoutMilliseconds: 1 },
+      topologySettleMilliseconds: 0,
+    });
+
+    coordinator.requestRefresh();
+    await coordinator.waitForIdle();
+    expect(coordinator.mappingState).toBe('other-scm-providers');
+
+    // Nothing in VS Code announces another provider going away, so the manual
+    // refresh is the retry.
+    extraProvider = false;
+    coordinator.retryIfUnavailable();
+    await coordinator.waitForIdle();
+    expect(coordinator.baselineEstablished).toBe(true);
+    expect(reconciler.hiddenRepositoryCount).toBe(2);
+
+    const readsAfterMapping = commandReads;
+    coordinator.retryIfUnavailable();
+    await coordinator.waitForIdle();
+    expect(commandReads).toBe(readsAfterMapping);
+    expect(reconciler.hiddenRepositoryCount).toBe(2);
+  });
+
   it('fails compatibility when the native selection-mode command family disappears', async () => {
     const native = nativeRepositories(['alpha', 'beta']);
     const onError = vi.fn();
