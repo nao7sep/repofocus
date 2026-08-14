@@ -9,9 +9,11 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 
 describe('RemoteFetchScheduler', () => {
   it('clears a failure when the repository stops being a fetch target', async () => {
+    // The repository stays open — only its eligibility goes away — so these
+    // carry the same identity predicate production supplies.
     let targets: RemoteFetchTarget[] = [
-      { key: 'alpha', fetch: () => Promise.reject(new Error('offline')) },
-      { key: 'beta', fetch: () => Promise.resolve() },
+      { key: 'alpha', isLive: () => true, fetch: () => Promise.reject(new Error('offline')) },
+      { key: 'beta', isLive: () => true, fetch: () => Promise.resolve() },
     ];
     const scheduler = new RemoteFetchScheduler({ getTargets: () => targets });
 
@@ -20,8 +22,8 @@ describe('RemoteFetchScheduler', () => {
     expect(scheduler.hasFailed('beta')).toBe(false);
     expect(scheduler.failureCount).toBe(1);
 
-    // Fetching disabled, the last remote removed, or the repository closed:
-    // whichever it was, nothing can ever clear the failure by fetching again.
+    // The last remote removed, or both remote-detection policies disabled:
+    // nothing can ever clear the failure by fetching again.
     targets = [];
     expect(scheduler.hasFailed('alpha')).toBe(false);
     expect(scheduler.failureCount).toBe(0);
@@ -33,8 +35,8 @@ describe('RemoteFetchScheduler', () => {
     const onSuccess = vi.fn();
     const onError = vi.fn();
     let targets: RemoteFetchTarget[] = [
-      { key: 'alpha', fetch: () => gate.promise },
-      { key: 'beta', fetch: () => Promise.reject(new Error('offline')) },
+      { key: 'alpha', isLive: () => true, fetch: () => gate.promise },
+      { key: 'beta', isLive: () => true, fetch: () => Promise.reject(new Error('offline')) },
     ];
     const scheduler = new RemoteFetchScheduler({
       getTargets: () => targets,

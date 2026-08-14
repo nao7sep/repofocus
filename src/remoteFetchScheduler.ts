@@ -3,11 +3,11 @@ import type { DisposableLike } from './gitApi';
 export interface RemoteFetchTarget {
   readonly key: string;
   /**
-   * Whether this exact target still exists. The key alone cannot answer it: a
-   * repository can close and reopen at the same URI while its fetch is in
+   * Whether this target is still the same thing it was. The key cannot answer
+   * it: a repository can close and reopen at the same URI while its fetch is in
    * flight, and the replacement is a different object wearing the same key.
-   * Callers that can distinguish the two supply this; the rest fall back to key
-   * membership.
+   * Callers that can distinguish the two supply this; it narrows the
+   * scheduler's own eligibility check rather than replacing it.
    */
   isLive?(): boolean;
   fetch(): Promise<void>;
@@ -126,9 +126,16 @@ export class RemoteFetchScheduler implements DisposableLike {
    * lose its last remote, while its fetch is still in flight; reporting that
    * completion would resurrect it in the caller's state.
    */
+  /**
+   * Liveness is eligibility *and* identity, composed here so a caller cannot
+   * answer one and silently lose the other. The target set answers whether this
+   * key is still worth fetching at all — its remotes, the policy — and the
+   * target itself answers whether it is the same repository the key now names.
+   */
   private isLive(target: RemoteFetchTarget): boolean {
-    if (target.isLive) return target.isLive();
-    return this.options.getTargets().some(candidate => candidate.key === target.key);
+    const current = this.options.getTargets().find(candidate => candidate.key === target.key);
+    if (!current) return false;
+    return target.isLive?.() ?? true;
   }
 
   private reschedule(): void {
