@@ -94,15 +94,24 @@ export class RemoteFetchScheduler implements DisposableLike {
           try {
             await target.fetch();
             this.failures.delete(target.key);
-            if (!this.disposed) this.options.onSuccess?.(target);
+            if (!this.disposed && this.isLive(target)) this.options.onSuccess?.(target);
           } catch (error) {
             this.failures.add(target.key);
-            if (!this.disposed) this.options.onError?.(target, error);
+            if (!this.disposed && this.isLive(target)) this.options.onError?.(target, error);
           }
         }
       };
       await Promise.all(Array.from({ length: Math.min(this.concurrency, targets.length) }, worker));
     }
+  }
+
+  /**
+   * Targets are a snapshot taken when a run starts. A repository can close, or
+   * lose its last remote, while its fetch is still in flight; reporting that
+   * completion would resurrect it in the caller's state.
+   */
+  private isLive(target: RemoteFetchTarget): boolean {
+    return this.options.getTargets().some(candidate => candidate.key === target.key);
   }
 
   private reschedule(): void {

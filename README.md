@@ -17,6 +17,7 @@ RepoFocus is a Preview VS Code extension for people who work in a parent folder 
 - A trusted local workspace. Virtual and untrusted workspaces are not supported.
 - Filtering starts at two detected repositories by default, so opening one specific repository always leaves it visible. `repofocus.minimumRepositoryCount` can change that threshold.
 - VS Code's repository selection mode must be `multiple`, which is its default. RepoFocus reads that setting and stays out of the way when it is `single`; it never writes VS Code configuration on its own.
+- Every Source Control provider in the window must be a Git repository. VS Code's visibility commands cover all providers while RepoFocus can only observe Git ones, so a workspace also running an SVN, Mercurial, or similar provider pauses filtering with an explanation instead of guessing.
 - Every repository must be visible in the Source Control Repositories view when RepoFocus starts filtering. If any are already hidden it says so and offers **RepoFocus: Reveal All Repositories in Source Control** rather than guessing, because VS Code gives an extension no way to tell which repositories are hidden.
 - During initialization the native repository list makes one visible transition while RepoFocus verifies the repository mappings and applies the final filter.
 - RepoFocus never opens, closes, focuses, or switches sidebar panes. VS Code creates the internal repository-visibility commands lazily, so RepoFocus waits quietly until the user first opens Source Control and then initializes filtering in place.

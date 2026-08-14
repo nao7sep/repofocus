@@ -37,10 +37,10 @@ That elimination needs every repository visible at the start. If repositories we
 
 ## Commands
 
-- **RepoFocus: Toggle Filtering** enables or disables automatic filtering. Turning it on while filtering cannot run — Source Control has not been opened, repositories are already hidden, the selection mode is `single`, or compatibility was lost — reports which of those it is rather than appearing to do nothing.
+- **RepoFocus: Toggle Filtering** enables or disables automatic filtering. Turning it on while filtering cannot run — Source Control has not been opened, repositories are already hidden, the selection mode is `single`, another Source Control provider is active, or compatibility was lost — reports which of those it is rather than appearing to do nothing.
 - **RepoFocus: Refresh** fetches eligible remotes, reevaluates every repository, and reconciles visibility.
 - **RepoFocus: Show All Repositories** disables filtering and restores repositories hidden by RepoFocus.
-- **RepoFocus: Copy Diagnostics** copies versions, aggregate counts, effective policy, and compatibility state without repository identifiers or Git content. Its `nativeMappingState` field distinguishes a mapped session from one waiting for Source Control to be opened, one declining because repositories are already hidden or the selection mode is `single`, and one that has lost compatibility.
+- **RepoFocus: Copy Diagnostics** copies versions, aggregate counts, effective policy, and compatibility state without repository identifiers or Git content. Its `nativeMappingState` field distinguishes a mapped session from one waiting for Source Control to be opened, one declining because repositories are already hidden, the selection mode is `single`, or another Source Control provider is active, and one that has lost compatibility.
 - **RepoFocus: Reveal All Repositories in Source Control** restores an all-visible repository list when some are hidden, after confirming that it changes VS Code's `scm.repositories.selectionMode` setting — the only mechanism VS Code offers for this, and the one place RepoFocus writes configuration.
 
 The filtering toggle is workspace presentation state and survives normal VS Code reloads. Internal command mappings are discovered again each time RepoFocus activates.

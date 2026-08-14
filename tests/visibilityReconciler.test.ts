@@ -147,6 +147,30 @@ describe('VisibilityReconciler', () => {
     expect(reconciler.hiddenRepositoryCount).toBe(0);
   });
 
+  it('drops ownership of a hidden repository that closes', async () => {
+    const alpha = repository('alpha');
+    const beta = repository('beta');
+    const toggle = vi.fn(async () => {});
+    const reconciler = new VisibilityReconciler({ toggle });
+    await reconciler.setFilteringEnabled(true);
+    reconciler.setMappings([mapping(alpha, 'toggle.alpha'), mapping(beta, 'toggle.beta')]);
+    reconciler.setActionability(alpha, clean);
+    reconciler.setActionability(beta, clean);
+    await reconciler.waitForIdle();
+    expect(reconciler.hiddenRepositoryCount).toBe(2);
+
+    // VS Code unregisters toggle.alpha along with the repository's provider.
+    reconciler.removeRepository(alpha);
+    expect(reconciler.hiddenRepositoryCount).toBe(1);
+
+    toggle.mockClear();
+    await reconciler.restoreOwned();
+
+    expect(toggle.mock.calls).toEqual([['toggle.beta']]);
+    expect(reconciler.hiddenRepositoryCount).toBe(0);
+    expect(reconciler.compatible).toBe(true);
+  });
+
   it('reconciles a state update that arrives during an in-flight toggle', async () => {
     const alpha = repository('alpha');
     let releaseFirstToggle: (() => void) | undefined;

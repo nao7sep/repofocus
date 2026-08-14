@@ -120,6 +120,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
         ).then(selection => {
           if (selection) void vscode.commands.executeCommand('repofocus.revealAll');
         });
+      } else if (reason === 'other-scm-providers') {
+        void vscode.window.showWarningMessage(
+          'RepoFocus only supports workspaces where every Source Control provider is a Git '
+          + 'repository, and another provider is active. Filtering is paused, not broken.',
+        );
       } else if (reason === 'single-selection-mode') {
         void vscode.window.showWarningMessage(
           'RepoFocus needs VS Code\'s Source Control repository selection mode set to "multiple".',
@@ -368,6 +373,9 @@ function describeMappingState(state: string): string | undefined {
         + 'Control Repositories view. Run RepoFocus: Reveal All Repositories in Source Control.';
     case 'single-selection-mode':
       return 'RepoFocus needs VS Code\'s repository selection mode set to "multiple".';
+    case 'other-scm-providers':
+      return 'RepoFocus only supports workspaces where every Source Control provider is a Git '
+        + 'repository, and another provider is active.';
     case 'incompatible':
       return 'RepoFocus stopped filtering because VS Code\'s internal visibility commands '
         + 'changed. Reload the window after checking RepoFocus: Copy Diagnostics.';

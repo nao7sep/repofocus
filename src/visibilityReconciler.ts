@@ -111,6 +111,12 @@ export class VisibilityReconciler {
 
   removeRepository(repository: RepositoryIdentity): void {
     const key = repositoryKey(repository);
+    const mapping = this.mappings.get(key);
+    // VS Code unregisters the visibility command along with the provider, so
+    // owning it is meaningless once the repository closes: retaining it would
+    // retry a command that can no longer exist — reported as a compatibility
+    // failure — and inflate every count RepoFocus publishes.
+    if (mapping) this.hiddenCommands.delete(mapping.command);
     this.actionability.delete(key);
     this.mappings.delete(key);
   }

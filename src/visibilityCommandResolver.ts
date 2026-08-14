@@ -16,6 +16,22 @@ export class VisibilityCompatibilityError extends Error {
   }
 }
 
+/**
+ * The visibility commands cover every Source Control provider, not only Git
+ * repositories, and focus transfer can only observe Git ones. A workspace with
+ * another SCM provider is therefore unsupported rather than broken — VS Code
+ * has not changed, so this must not be reported as a compatibility failure.
+ */
+export class OtherScmProvidersError extends Error {
+  constructor(readonly commandCount: number, readonly repositoryCount: number) {
+    super(
+      `VS Code has ${commandCount} Source Control providers but only ${repositoryCount} `
+      + 'are Git repositories, so RepoFocus cannot tell them apart.',
+    );
+    this.name = 'OtherScmProvidersError';
+  }
+}
+
 export const selectionModeCommandPrefix = 'workbench.scm.action.repositories.setSelectionMode.';
 
 /**

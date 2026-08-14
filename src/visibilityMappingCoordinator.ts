@@ -6,6 +6,7 @@ import {
 } from './visibilityBaseline';
 import {
   discoverVisibilityCommands,
+  OtherScmProvidersError,
   VisibilityCompatibilityError,
 } from './visibilityCommandResolver';
 import type { VisibilityReconciler } from './visibilityReconciler';
@@ -19,7 +20,8 @@ export interface VisibilityInitialization {
 export type VisibilityUnavailableReason =
   | 'awaiting-native-commands'
   | 'repositories-already-hidden'
-  | 'single-selection-mode';
+  | 'single-selection-mode'
+  | 'other-scm-providers';
 
 export interface VisibilityMappingCoordinatorOptions {
   readonly filteringRequested: () => boolean;
@@ -170,6 +172,12 @@ export class VisibilityMappingCoordinator {
     try {
       commands = await this.resolveSettledCommands(repositories.length, revision);
     } catch (error) {
+      // Another SCM provider is present: unsupported, not incompatible, so it
+      // stays recoverable instead of ending filtering for the window.
+      if (error instanceof OtherScmProvidersError) {
+        await this.standDown('other-scm-providers', revision);
+        return;
+      }
       if (revision === this.revision) await this.options.reconciler.failCompatibility(error);
       return;
     }
@@ -246,9 +254,7 @@ export class VisibilityMappingCoordinator {
             + 'so the internal visibility contract RepoFocus depends on has changed.',
           );
         }
-        throw new VisibilityCompatibilityError(
-          `Expected one native visibility command per Git repository; found ${discovery.commandCount} commands for ${repositoryCount} repositories.`,
-        );
+        throw new OtherScmProvidersError(discovery.commandCount, repositoryCount);
       } catch (error) {
         lastError = error;
         if (attempt + 1 < attempts) await delay(retryMilliseconds);

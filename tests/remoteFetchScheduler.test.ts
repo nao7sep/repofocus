@@ -28,6 +28,32 @@ describe('RemoteFetchScheduler', () => {
     scheduler.dispose();
   });
 
+  it('does not report a completion for a target that disappeared mid-fetch', async () => {
+    const gate = deferred();
+    const onSuccess = vi.fn();
+    const onError = vi.fn();
+    let targets: RemoteFetchTarget[] = [
+      { key: 'alpha', fetch: () => gate.promise },
+      { key: 'beta', fetch: () => Promise.reject(new Error('offline')) },
+    ];
+    const scheduler = new RemoteFetchScheduler({
+      getTargets: () => targets,
+      concurrency: 2,
+      onSuccess,
+      onError,
+    });
+
+    const run = scheduler.refreshNow();
+    // The repository closes while its fetch is still in flight.
+    targets = [];
+    gate.resolve();
+    await run;
+
+    expect(onSuccess).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    scheduler.dispose();
+  });
+
   it('clears a failure after a later successful fetch', async () => {
     let fail = true;
     const targets: RemoteFetchTarget[] = [

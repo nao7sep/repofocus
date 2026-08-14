@@ -318,6 +318,47 @@ describe('VisibilityMappingCoordinator', () => {
     expect(reconciler.hiddenRepositoryCount).toBe(2);
   });
 
+  it('declines instead of failing when another SCM provider is present', async () => {
+    const native = nativeRepositories(['alpha', 'beta']);
+    const onError = vi.fn();
+    const onUnavailable = vi.fn();
+    const execute = vi.fn(native.execute);
+    const reconciler = new VisibilityReconciler({ toggle: execute, onError });
+    for (const repository of native.repositories) reconciler.setActionability(repository, clean);
+    let extraProvider = true;
+    const coordinator = new VisibilityMappingCoordinator({
+      filteringRequested: () => true,
+      getCommands: () => Promise.resolve(extraProvider
+        ? [...native.discoveryCommands, `${visibilityCommandPrefix}scm9`]
+        : native.discoveryCommands),
+      getRepositories: () => native.repositories,
+      multipleSelectionMode: () => true,
+      minimumRepositoryCount: () => 2,
+      reconciler,
+      onUnavailable,
+      commandRetryAttempts: 1,
+      probeTimings: { probeMilliseconds: 1, selectionTimeoutMilliseconds: 1 },
+      topologySettleMilliseconds: 0,
+    });
+
+    coordinator.requestRefresh();
+    await coordinator.waitForIdle();
+
+    expect(onUnavailable).toHaveBeenCalledWith('other-scm-providers');
+    expect(coordinator.mappingState).toBe('other-scm-providers');
+    // An unsupported workspace is not a broken VS Code: it must stay recoverable.
+    expect(reconciler.compatible).toBe(true);
+    expect(onError).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+
+    extraProvider = false;
+    coordinator.requestRefresh();
+    await coordinator.waitForIdle();
+
+    expect(coordinator.baselineEstablished).toBe(true);
+    expect(reconciler.hiddenRepositoryCount).toBe(2);
+  });
+
   it('fails compatibility when the native selection-mode command family disappears', async () => {
     const native = nativeRepositories(['alpha', 'beta']);
     const onError = vi.fn();
