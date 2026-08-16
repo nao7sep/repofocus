@@ -1,6 +1,6 @@
 # RepoFocus
 
-RepoFocus is a Preview VS Code extension for people who work in a parent folder containing many Git repositories. It keeps every repository registered with VS Code's built-in Git extension while removing clean repositories from the native Source Control view; a repository's complete native section returns when it has local changes, conflicts, incoming or outgoing commits, an unpublished branch, a rebase in progress, or an explicit always-show match. RepoFocus exists so actionable repositories fit on screen without folding clean ones or risking that hidden repositories stop being monitored.
+RepoFocus is a Preview VS Code extension for people who work with many Git repositories at once — whether they sit together under one parent folder or are opened as separate folders of a multi-root workspace. It keeps every repository registered with VS Code's built-in Git extension while removing clean repositories from the native Source Control view; a repository's complete native section returns when it has local changes, conflicts, incoming or outgoing commits, an unpublished branch, a rebase in progress, or an explicit always-show match. RepoFocus exists so actionable repositories fit on screen without folding clean ones or risking that hidden repositories stop being monitored.
 
 ## Features
 
@@ -53,6 +53,6 @@ See [docs/reference.md](docs/reference.md) for the actionability contract, setti
 
 MIT © 2026 Yoshinao Inoguchi
 
-## Contact
+## Support
 
-Yoshinao Inoguchi — nao7sep@gmail.com
+Questions, bug reports, and feature requests belong in [GitHub Issues](https://github.com/nao7sep/repofocus/issues). For anything security-related, see [SECURITY.md](SECURITY.md) — please do not open a public issue.

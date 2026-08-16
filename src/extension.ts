@@ -157,8 +157,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
       const input = toActionabilityInput(repository.state);
       value = classifyRepository({
         ...input,
+        // No includeWorkspaceFolder argument on purpose. VS Code's own default is
+        // "true when there are multiple workspace folders and false otherwise",
+        // which is exactly the behaviour alwaysShow needs: in the single-folder
+        // shape a pattern stays a plain subpath, and in a multi-root workspace the
+        // folder name is prepended so two same-named repositories in different
+        // roots stay distinguishable. Passing false explicitly used to override
+        // that and collapse every multi-root repository onto one pattern string.
         alwaysShow: matchesAlwaysShow(
-          vscode.workspace.asRelativePath(repository.rootUri.fsPath, false),
+          vscode.workspace.asRelativePath(repository.rootUri.fsPath),
           alwaysShowPatterns,
         ),
         evaluationError: remoteFailure(repository.rootUri.toString()),

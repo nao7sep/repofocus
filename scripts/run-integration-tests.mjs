@@ -9,6 +9,11 @@ import { runTests } from '@vscode/test-electron';
 const projectRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const fixtureRoot = await mkdtemp(join(tmpdir(), 'repofocus-integration-'));
 const remoteRoot = await mkdtemp(join(tmpdir(), 'repofocus-remotes-'));
+// The multi-root fixture's two folders must live under genuinely separate
+// parents — the point of the shape is that they share no common workspace root.
+const multiRootRoot = await mkdtemp(join(tmpdir(), 'repofocus-multiroot-'));
+const multiRootFirst = join(multiRootRoot, 'first-parent');
+const multiRootSecond = join(multiRootRoot, 'second-parent');
 const configuredVscodeExecutablePath = process.env.VSCODE_EXECUTABLE_PATH;
 const localVscodeExecutablePath = '/Applications/Visual Studio Code.app/Contents/MacOS/Code';
 const vscodeExecutablePath = configuredVscodeExecutablePath
@@ -19,8 +24,12 @@ function git(repositoryPath, ...args) {
 }
 
 async function createRepository(name) {
-  const repositoryPath = join(fixtureRoot, name);
-  await mkdir(repositoryPath);
+  await createRepositoryAt(join(fixtureRoot, name));
+}
+
+async function createRepositoryAt(repositoryPath) {
+  const name = repositoryPath.split('/').pop();
+  await mkdir(repositoryPath, { recursive: true });
   git(repositoryPath, 'init', '-b', 'main');
   git(repositoryPath, 'config', 'user.name', 'RepoFocus Tests');
   git(repositoryPath, 'config', 'user.email', 'repofocus-tests@example.invalid');
@@ -64,7 +73,39 @@ try {
       '--skip-release-notes',
     ],
   });
+
+  // Second run: the multi-root shape. Two repositories with the SAME directory
+  // name, in unrelated parent directories, opened as sibling workspace folders
+  // through a .code-workspace file — the only way to put VS Code into a genuine
+  // multi-root workspace, and the shape the single-folder run above cannot cover.
+  const firstMultiRootFolder = join(multiRootFirst, 'shared');
+  const secondMultiRootFolder = join(multiRootSecond, 'shared');
+  await createRepositoryAt(firstMultiRootFolder);
+  await createRepositoryAt(secondMultiRootFolder);
+  const workspaceFile = join(multiRootRoot, 'multi-root.code-workspace');
+  await writeFile(
+    workspaceFile,
+    JSON.stringify({ folders: [{ path: firstMultiRootFolder }, { path: secondMultiRootFolder }] }, null, 2),
+    'utf8',
+  );
+
+  await runTests({
+    ...(vscodeExecutablePath ? { vscodeExecutablePath } : { version: '1.131.0' }),
+    extensionDevelopmentPath: projectRoot,
+    extensionTestsPath: join(projectRoot, 'dist-tests', 'multiRoot.js'),
+    extensionTestsEnv: {
+      REPOFOCUS_MULTIROOT_FIRST: firstMultiRootFolder,
+      REPOFOCUS_MULTIROOT_SECOND: secondMultiRootFolder,
+    },
+    launchArgs: [
+      workspaceFile,
+      '--disable-workspace-trust',
+      '--skip-welcome',
+      '--skip-release-notes',
+    ],
+  });
 } finally {
   await rm(fixtureRoot, { recursive: true, force: true });
   await rm(remoteRoot, { recursive: true, force: true });
+  await rm(multiRootRoot, { recursive: true, force: true });
 }

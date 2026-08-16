@@ -23,7 +23,9 @@ A detached HEAD, unborn branch, or local-only branch is not remote work by itsel
 
 `repofocus.fetchIntervalMinutes` controls extension-owned background fetches and defaults to 5. Set it to 0 to disable those fetches and rely on VS Code and manual Git refreshes. Fetches are non-overlapping and use at most two repositories concurrently.
 
-`repofocus.alwaysShow` accepts workspace-relative Git repository glob patterns. For a workspace opened at a parent directory, `company`, `clients/*`, and `experiments/**` are representative patterns. Matching is case-sensitive except on Windows.
+`repofocus.alwaysShow` accepts Git repository glob patterns. For a workspace opened at a parent directory, patterns are workspace-relative: `company`, `clients/*`, and `experiments/**` are representative. Matching is case-sensitive except on Windows.
+
+In a multi-root workspace the pattern is matched against whatever VS Code reports as the repository's path. A repository nested inside a workspace folder is matched folder-first (`frontend/packages/api`). A repository that **is** a workspace folder has no relative form — VS Code returns its absolute path — so only an absolute pattern matches it. Absolute patterns are machine-specific, which makes them a poor fit for shared settings; targeting a folder-root repository by name is a known gap rather than a supported form.
 
 `repofocus.minimumRepositoryCount` defaults to `2`. RepoFocus shows every repository and does not initialize native filtering while fewer repositories are detected. Set it to `1` only if a clean single-repository workspace should be filtered too.
 

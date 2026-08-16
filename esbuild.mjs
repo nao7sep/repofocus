@@ -10,6 +10,14 @@ const builds = [
     entryPoints: ['tests/integration/index.ts'],
     outfile: 'dist-tests/integration.js',
   },
+  // A second Extension Host entry point, because the multi-root case is a
+  // different WORKSPACE SHAPE rather than a different assertion: it needs VS Code
+  // launched on a .code-workspace listing folders from unrelated directories, so
+  // it cannot ride inside the single-folder run above.
+  {
+    entryPoints: ['tests/integration/multiRoot.ts'],
+    outfile: 'dist-tests/multiRoot.js',
+  },
 ];
 
 const shared = {
