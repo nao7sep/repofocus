@@ -1,15 +1,36 @@
 name: Release
 
+# Per the app-release-conventions: verify → package → attach to a DRAFT release.
+# Nothing is published automatically; a draft is created for the pushed tag,
+# inspected, then published by hand (gh release edit --draft=false).
+#
+# Two triggers:
+#   - push a tag `v*`     -> verify, package once, attach the VSIX + its SHA-256
+#                            to a single draft pre-release for that tag.
+#   - manual dispatch     -> verify and package only, no release. The VSIX is left
+#                            as a workflow artifact so a smoke check has something
+#                            inspectable without creating anything public.
+#
+# MARKETPLACE PUBLICATION IS DELIBERATELY ABSENT FROM THIS FILE. Pushing a tag must
+# never be able to make an irreversible external release. Publication runs from its
+# own manually dispatched workflow, which downloads the already-inspected VSIX from
+# the draft release and verifies its digest before uploading. Do not add a publish
+# step here, and do not grant this workflow `id-token: write`.
+
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  verify-and-package:
+  # Gate: a failing suite means nothing gets packaged. Split from packaging so a
+  # verification failure is unambiguous — it cannot be confused with a packaging
+  # fault, and no artifact exists to be mistaken for a releasable one.
+  verify:
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -24,27 +45,85 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Check and test
-        run: |
-          npm run check
-          npm run test:coverage
-          xvfb-run -a npm run test:integration
+      - name: Check (typecheck, lint, unit tests)
+        run: npm run check
 
+      - name: Coverage
+        run: npm run test:coverage
+
+      # The Extension Host tests need a display; xvfb provides one on the runner.
+      # This covers both workspace shapes — one folder holding many repositories,
+      # and a multi-root workspace of repositories from unrelated directories.
+      - name: Extension Host integration tests
+        run: xvfb-run -a npm run test:integration
+
+  package:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Packaged exactly once, and the artifact attached below is this same file —
+      # never a rebuild, since two `vsce package` runs are not byte-identical and a
+      # digest would then describe an artifact nobody inspected.
+      #
+      # `vsce package` runs `vscode:prepublish` (npm run check && npm run build), so
+      # the checks run again here. That repetition is deliberate: it is the gate ON
+      # THE SHIPPING PATH, the one that would still fire if this workflow were
+      # bypassed and someone packaged by hand.
       - name: Package VSIX
         id: package
         run: |
           version="$(node -p "require('./package.json').version")"
           file="repofocus-${version}.vsix"
           npm exec vsce package -- --out "$file"
+          sha256sum "$file" > "${file}.sha256"
           echo "file=$file" >> "$GITHUB_OUTPUT"
+          echo "digest=${file}.sha256" >> "$GITHUB_OUTPUT"
+          cat "${file}.sha256"
 
-      - name: Create draft GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VSIX_FILE: ${{ steps.package.outputs.file }}
-        run: |
-          gh release create "$GITHUB_REF_NAME" "$VSIX_FILE" \
-            --draft \
-            --prerelease \
-            --generate-notes \
-            --title "RepoFocus $GITHUB_REF_NAME"
+      # Keeps a dispatch run inspectable without creating anything public.
+      - name: Upload VSIX as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsix
+          path: |
+            ${{ steps.package.outputs.file }}
+            ${{ steps.package.outputs.digest }}
+          if-no-files-found: error
+
+      # The one release action used fleet-wide, pinned to a full commit SHA.
+      # Tag pushes only — a dispatch run stops at the artifact above.
+      - name: Attach to draft release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        with:
+          draft: true
+          prerelease: true # 0.x is pre-release
+          name: RepoFocus ${{ github.ref_name }}
+          # Body renders from the pushed tag, so the note never goes stale on a
+          # version bump — no release-specific text is baked in.
+          body: |
+            **RepoFocus ${{ github.ref_name }}**
+
+            A Preview VS Code extension that keeps your Source Control view to the
+            repositories that actually need you.
+
+            **Install from this release**: download the `.vsix`, then run
+            `code --install-extension repofocus-<version>.vsix` — or use
+            **Extensions → … → Install from VSIX…**.
+
+            The `.sha256` file alongside is the digest of the exact VSIX attached here.
+          files: |
+            ${{ steps.package.outputs.file }}
+            ${{ steps.package.outputs.digest }}
