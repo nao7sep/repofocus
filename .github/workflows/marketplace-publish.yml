@@ -1,0 +1,107 @@
+name: Marketplace publish
+
+# Publishes an already-built, already-inspected VSIX to the VS Code Marketplace.
+#
+# MANUAL DISPATCH ONLY, BY DESIGN. Pushing a tag must never be able to make an
+# irreversible external release: `release.yml` builds and attaches a DRAFT GitHub
+# release and stops there, and this workflow is the separate, deliberate act that
+# publishes. Do not merge the two, and do not add a tag trigger here.
+#
+# It also never builds. It downloads the exact asset that `release.yml` produced
+# and that a human then inspected, and verifies the SHA-256 before uploading —
+# because two `vsce package` runs are not byte-identical, so anything rebuilt here
+# would be an artifact nobody looked at.
+#
+# AUTHENTICATION is Microsoft Entra workload identity federation — no PAT, no
+# stored secret. GitHub mints a short-lived OIDC token, Azure exchanges it for an
+# access token for the user-assigned managed identity `repofocus-publisher`, and
+# that identity is a Contributor on Marketplace publisher `nao7sep`.
+# (Global Azure DevOps PATs retire 2026-12-01; this path does not depend on them.)
+#
+# `environment: marketplace` is LOAD-BEARING: the federated credential's subject is
+# scoped to that environment, so without this line the OIDC subject will not match
+# and the login fails with AADSTS700213.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v0.1.0). Must be an existing draft release."
+        required: true
+        type: string
+
+permissions:
+  id-token: write # mint the OIDC token for the federated credential
+  contents: read # read the draft release and its assets
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: marketplace
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      # vsce comes from the repo's own pinned dependency rather than a floating
+      # `npx @vscode/vsce`, so the tool that publishes is the one that was tested.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download the VSIX and its digest from the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "${{ inputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --pattern '*.vsix' --pattern '*.vsix.sha256'
+          ls -la ./*.vsix ./*.vsix.sha256
+
+      # The digest is the whole point of not rebuilding: it proves this is the
+      # artifact that was inspected. A mismatch stops the run before anything
+      # reaches the Marketplace, where a publish cannot be taken back.
+      - name: Verify the digest
+        run: |
+          sha256sum --check ./*.vsix.sha256
+          echo "digest verified against the attached artifact"
+
+      - name: Sign in to Azure as the publishing identity
+        uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3.0.1
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          # The identity holds no subscription role — it only needs a token for
+          # Azure DevOps — so a subscription-less login is expected, not a fault.
+          allow-no-subscriptions: true
+
+      - name: Publish to the Marketplace
+        run: |
+          vsix="$(ls ./*.vsix)"
+          echo "publishing $vsix"
+          # --packagePath: upload this exact file, never repackage.
+          # --pre-release: 0.x ships as a Marketplace pre-release, matching the
+          #   Preview manifest and the GitHub pre-release flag.
+          # --skip-duplicate: re-running for a version already published is a no-op
+          #   rather than a hard failure, so a partial run is safe to repeat.
+          # --azure-credential: use the federated identity above, not a PAT.
+          npm exec vsce -- publish \
+            --packagePath "$vsix" \
+            --pre-release \
+            --skip-duplicate \
+            --azure-credential
+
+      - name: Summary
+        run: |
+          {
+            echo "## Published"
+            echo
+            echo "- Tag: \`${{ inputs.tag }}\`"
+            echo "- Listing: https://marketplace.visualstudio.com/items?itemName=nao7sep.repofocus"
+            echo
+            echo "The GitHub release is still a **draft** — publishing it there is a separate, manual step."
+          } >> "$GITHUB_STEP_SUMMARY"
