@@ -159,11 +159,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
         ...input,
         // No includeWorkspaceFolder argument on purpose. VS Code's own default is
         // "true when there are multiple workspace folders and false otherwise",
-        // which is exactly the behaviour alwaysShow needs: in the single-folder
-        // shape a pattern stays a plain subpath, and in a multi-root workspace the
-        // folder name is prepended so two same-named repositories in different
-        // roots stay distinguishable. Passing false explicitly used to override
-        // that and collapse every multi-root repository onto one pattern string.
+        // which is what alwaysShow wants: a single-folder workspace keeps plain
+        // subpaths, and a repository NESTED inside a multi-root folder keeps that
+        // folder prepended rather than being stripped to a bare subpath, which is
+        // what an explicit `false` did. For a repository that IS a workspace folder
+        // the argument is inert — measured in a live Extension Host, `true`, `false`
+        // and the default all return the absolute path, because there is no relative
+        // form to produce. That shape is matched by name instead; see alwaysShow.
         alwaysShow: matchesAlwaysShow(
           vscode.workspace.asRelativePath(repository.rootUri.fsPath),
           alwaysShowPatterns,

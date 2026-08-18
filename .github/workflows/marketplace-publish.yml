@@ -84,14 +84,18 @@ jobs:
           vsix="$(ls ./*.vsix)"
           echo "publishing $vsix"
           # --packagePath: upload this exact file, never repackage.
-          # --pre-release: 0.x ships as a Marketplace pre-release, matching the
-          #   Preview manifest and the GitHub pre-release flag.
           # --skip-duplicate: re-running for a version already published is a no-op
           #   rather than a hard failure, so a partial run is safe to repeat.
           # --azure-credential: use the federated identity above, not a PAT.
+          #
+          # NOT --pre-release, deliberately. A Marketplace pre-release is normally
+          # opt-in: VS Code installs the latest STABLE by default and a user has to
+          # choose "Switch to Pre-Release Version". With no stable version to fall
+          # back to, that risks an extension people can find but not straightforwardly
+          # install — which defeats the point of listing it. 0.x is signalled by the
+          # version number and the changelog instead.
           npm exec vsce -- publish \
             --packagePath "$vsix" \
-            --pre-release \
             --skip-duplicate \
             --azure-credential
 

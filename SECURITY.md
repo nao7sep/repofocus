@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-RepoFocus is a Preview extension. Security fixes land on the latest published version only; there are no maintained older lines.
+RepoFocus is at `0.x`. Security fixes land on the latest published version only; there are no maintained older lines.
 
 ## Reporting a vulnerability
 

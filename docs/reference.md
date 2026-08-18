@@ -23,17 +23,21 @@ A detached HEAD, unborn branch, or local-only branch is not remote work by itsel
 
 `repofocus.fetchIntervalMinutes` controls extension-owned background fetches and defaults to 5. Set it to 0 to disable those fetches and rely on VS Code and manual Git refreshes. Fetches are non-overlapping and use at most two repositories concurrently.
 
-`repofocus.alwaysShow` accepts Git repository glob patterns. For a workspace opened at a parent directory, patterns are workspace-relative: `company`, `clients/*`, and `experiments/**` are representative. Matching is case-sensitive except on Windows.
+`repofocus.alwaysShow` accepts Git repository glob patterns. A pattern matches a repository if it matches **either the repository's path as VS Code reports it, or the repository's own directory name**. Matching is case-sensitive except on Windows.
 
-In a multi-root workspace the pattern is matched against whatever VS Code reports as the repository's path. A repository nested inside a workspace folder is matched folder-first (`frontend/packages/api`). A repository that **is** a workspace folder has no relative form — VS Code returns its absolute path — so only an absolute pattern matches it. Absolute patterns are machine-specific, which makes them a poor fit for shared settings; targeting a folder-root repository by name is a known gap rather than a supported form.
+For a workspace opened at a parent directory, paths are workspace-relative: `company`, `clients/*`, and `experiments/**` are representative. In a multi-root workspace, a repository nested inside a workspace folder is matched folder-first (`frontend/packages/api`), while a repository that **is** a workspace folder has no relative form — VS Code returns its absolute path — and is matched by its name, `repofocus`.
+
+Matching the name as well as the path is what makes the setting portable: an absolute pattern would work only on the machine it was written on. The trade is that two repositories sharing a directory name in different roots both match a bare-name pattern. That is usually the intent, since a name names a repository rather than a location; write a longer path when it is not.
 
 `repofocus.minimumRepositoryCount` defaults to `2`. RepoFocus shows every repository and does not initialize native filtering while fewer repositories are detected. Set it to `1` only if a clean single-repository workspace should be filtered too.
 
 `scm.repositories.visible` is irrelevant to RepoFocus. It sizes the Source Control Repositories section and places no cap on which repositories can be visible, so RepoFocus neither reads it nor contributes a default for it.
 
-RepoFocus requires VS Code's `multiple` repository-selection mode, which is VS Code's default. It reads that setting and declines to filter while it is `single`, recovering by itself when the value changes back. RepoFocus writes no VS Code configuration.
+RepoFocus requires VS Code's `multiple` repository-selection mode. It reads that setting and declines to filter while it is `single`, recovering by itself when the value changes back. It also contributes `multiple` as that setting's default, so the mode it needs is the mode a fresh install gets; on current VS Code that is already the registered default, making the contribution a no-op rather than a change to anyone's editor.
 
-It never changes the active sidebar pane. After the user opens Source Control, VS Code registers the internal repository-visibility commands; RepoFocus then maps each one to its repository by reversibly hiding the focused repository and reading which repository receives focus. When no remaining command moves focus, one repository is still visible and its command is the single unmapped one, by elimination.
+RepoFocus writes no VS Code configuration during normal operation — the sole exception is **Reveal All Repositories in Source Control**, which changes `scm.repositories.selectionMode` and only after an explicit confirmation. See Commands.
+
+It never changes the active sidebar pane. After the user opens Source Control, VS Code registers the internal repository-visibility commands; RepoFocus then maps each one to its repository by reversibly hiding the focused repository and reading which repository receives focus. When no remaining command moves focus, one repository is still visible and its command is the single unmapped one, by elimination. That probe is visible: the repository list makes one pass of hiding and restoring before the first filter settles, once per session.
 
 That elimination needs every repository visible at the start. If repositories were already hidden, more than one command is left unmapped and RepoFocus cannot identify them: a hidden repository never holds focus, and revealing one produces no observable event. RepoFocus reports this instead of guessing.
 

@@ -6,7 +6,8 @@ name: Release
 #
 # Two triggers:
 #   - push a tag `v*`     -> verify, package once, attach the VSIX + its SHA-256
-#                            to a single draft pre-release for that tag.
+#                            to a single draft release for that tag. Not flagged a
+#                            pre-release; see the `prerelease:` note below for why.
 #   - manual dispatch     -> verify and package only, no release. The VSIX is left
 #                            as a workflow artifact so a smoke check has something
 #                            inspectable without creating anything public.
@@ -109,14 +110,19 @@ jobs:
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
         with:
           draft: true
-          prerelease: true # 0.x is pre-release
+          # NOT a pre-release. "Pre-release" versus "release" is a subjective label
+          # that buys no real latitude — it reads as an excuse rather than a fact —
+          # so a 0.x version number carries that signal on its own. The draft flag
+          # above is what actually protects the release: nothing goes public until
+          # it is inspected and published by hand.
+          prerelease: false
           name: RepoFocus ${{ github.ref_name }}
           # Body renders from the pushed tag, so the note never goes stale on a
           # version bump — no release-specific text is baked in.
           body: |
             **RepoFocus ${{ github.ref_name }}**
 
-            A Preview VS Code extension that keeps your Source Control view to the
+            A VS Code extension that keeps your Source Control view to the
             repositories that actually need you.
 
             **Install from this release**: download the `.vsix`, then run

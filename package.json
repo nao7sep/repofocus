@@ -5,7 +5,6 @@
   "version": "0.1.0",
   "publisher": "nao7sep",
   "license": "MIT",
-  "preview": true,
   "icon": "icon.png",
   "repository": {
     "type": "git",
@@ -129,7 +128,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Workspace-relative Git repository glob patterns that remain visible even when clean."
+          "description": "Git repository glob patterns that remain visible even when clean. A pattern matches a repository's path (workspace-relative where it has one) or its directory name, so a bare name such as 'my-repo' works in any workspace shape."
         },
         "repofocus.minimumRepositoryCount": {
           "type": "integer",
