@@ -32,7 +32,14 @@ on:
 
 permissions:
   id-token: write # mint the OIDC token for the federated credential
-  contents: read # read the draft release and its assets
+  # `write`, not `read`, and the reason is not obvious: a DRAFT release is invisible
+  # to a read-only token. Drafts are not addressable by tag at all — the REST
+  # endpoint /releases/tags/{tag} 404s for them even for a repo owner — so `gh`
+  # falls back to LISTING releases and matching client-side, and listing drafts
+  # requires push access. With `contents: read` this step fails "release not found".
+  # This workflow still creates and edits nothing; the digest check below is what
+  # actually protects the publish.
+  contents: write # list and download the draft release's assets
 
 jobs:
   publish:
