@@ -1,0 +1,172 @@
+{
+  "name": "repofocus",
+  "displayName": "RepoFocus",
+  "description": "Shows only actionable Git repositories in VS Code's native Source Control view.",
+  "version": "0.1.0",
+  "publisher": "nao7sep",
+  "license": "MIT",
+  "preview": true,
+  "icon": "icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nao7sep/repofocus.git"
+  },
+  "bugs": {
+    "url": "https://github.com/nao7sep/repofocus/issues"
+  },
+  "homepage": "https://github.com/nao7sep/repofocus#readme",
+  "engines": {
+    "vscode": "^1.131.0"
+  },
+  "categories": [
+    "SCM Providers"
+  ],
+  "keywords": [
+    "git",
+    "source-control",
+    "multi-repo",
+    "repository",
+    "vscode-extension"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "extensionDependencies": [
+    "vscode.git"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false
+    },
+    "virtualWorkspaces": {
+      "supported": false
+    }
+  },
+  "contributes": {
+    "configurationDefaults": {
+      "scm.repositories.selectionMode": "multiple"
+    },
+    "commands": [
+      {
+        "command": "repofocus.toggle",
+        "title": "Toggle Filtering",
+        "category": "RepoFocus",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "repofocus.refresh",
+        "title": "Refresh",
+        "category": "RepoFocus",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "repofocus.showAll",
+        "title": "Show All Repositories",
+        "category": "RepoFocus"
+      },
+      {
+        "command": "repofocus.copyDiagnostics",
+        "title": "Copy Diagnostics",
+        "category": "RepoFocus"
+      },
+      {
+        "command": "repofocus.revealAll",
+        "title": "Reveal All Repositories in Source Control",
+        "category": "RepoFocus"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "repofocus.toggle",
+          "when": "view == workbench.scm && repofocus.compatible",
+          "group": "navigation@100"
+        },
+        {
+          "command": "repofocus.refresh",
+          "when": "view == workbench.scm && repofocus.filteringEnabled && repofocus.compatible",
+          "group": "navigation@101"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "RepoFocus",
+      "properties": {
+        "repofocus.includeUntrackedFiles": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "description": "Treat repositories containing untracked files as actionable."
+        },
+        "repofocus.includeOutgoingCommits": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "description": "Treat repositories with outgoing commits or an unpublished branch as actionable."
+        },
+        "repofocus.includeIncomingCommits": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "description": "Treat repositories with incoming commits as actionable."
+        },
+        "repofocus.fetchIntervalMinutes": {
+          "type": "number",
+          "default": 5,
+          "minimum": 0,
+          "maximum": 1440,
+          "scope": "window",
+          "description": "Minutes between bounded background Git fetches used to detect incoming and outgoing commits. Set to 0 to disable automatic fetching."
+        },
+        "repofocus.alwaysShow": {
+          "type": "array",
+          "default": [],
+          "scope": "window",
+          "items": {
+            "type": "string"
+          },
+          "description": "Workspace-relative Git repository glob patterns that remain visible even when clean."
+        },
+        "repofocus.minimumRepositoryCount": {
+          "type": "integer",
+          "default": 2,
+          "minimum": 1,
+          "maximum": 100,
+          "scope": "window",
+          "description": "Minimum number of detected Git repositories required before RepoFocus filters clean repositories."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
+    "lint": "eslint src tests scripts esbuild.mjs vitest.config.mts",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:integration": "npm run build && node scripts/run-integration-tests.mjs",
+    "check": "npm run typecheck && npm run lint && npm test",
+    "vscode:prepublish": "npm run check && npm run build"
+  },
+  "dependencies": {
+    "minimatch": "10.2.6"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.1.2",
+    "@types/vscode": "1.125.0",
+    "@vitest/coverage-v8": "4.1.10",
+    "@vscode/test-electron": "3.1.0",
+    "@vscode/vsce": "3.9.2",
+    "esbuild": "0.28.1",
+    "eslint": "^10.8.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.66.0",
+    "vitest": "4.1.10"
+  }
+}

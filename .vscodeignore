@@ -1,0 +1,23 @@
+# Repository-only metadata and automation
+.gitignore
+.github/**
+.vscode/**
+.vscode-test/**
+**/.DS_Store
+
+# Development sources and tooling
+assets/**
+eslint.config.mjs
+esbuild.mjs
+scripts/**
+src/**
+tests/**
+tsconfig*.json
+vitest.config.mts
+package-lock.json
+
+# Generated files not needed at runtime
+coverage/**
+dist-tests/**
+dist/**/*.map
+node_modules/**
