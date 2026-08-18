@@ -1,0 +1,61 @@
+name: Marketplace identity
+
+# A one-off lookup, kept because it is re-runnable rather than because it runs often.
+#
+# Adding the publishing identity to the Marketplace publisher requires its AZURE
+# DEVOPS PROFILE ID. That id is not the client id, tenant id, or resource id — the
+# Members form rejects all three — and it does not exist until the identity has
+# authenticated to Azure DevOps at least once. A user-assigned managed identity
+# cannot be assumed from a laptop, so the only place that first authentication can
+# happen is here, inside a workflow holding the federated credential.
+#
+# Run this, copy the printed id, and paste it into
+#   https://marketplace.visualstudio.com/manage/publishers/nao7sep  ->  Members -> Add
+# with the role Contributor. Re-run it if the identity is ever recreated.
+#
+# NOTE ON SCOPE: the federated credential is bound to `environment:marketplace`,
+# NOT to a branch or tag. Federated subjects do not support wildcards, so a
+# tag-scoped credential would authorize exactly one literal tag and break on the
+# next release. The `environment:` line below is therefore load-bearing — without
+# it the OIDC subject will not match and the login fails.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write # required to mint the OIDC token; nothing else is needed
+  contents: read
+
+jobs:
+  profile-id:
+    runs-on: ubuntu-latest
+    environment: marketplace
+    steps:
+      - name: Sign in to Azure as the publishing identity
+        uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3.0.1
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          # The identity holds no subscription role — it only ever needs a token
+          # for Azure DevOps — so a subscription-less login is expected, not a fault.
+          allow-no-subscriptions: true
+
+      - name: Read this identity's Azure DevOps profile id
+        run: |
+          # 499b84ac-1321-427f-aa17-267ca6975798 is the fixed Azure DevOps resource id.
+          # Calling /profiles/me as this identity is what materialises its profile.
+          id="$(az rest \
+            -u https://app.vssps.visualstudio.com/_apis/profile/profiles/me \
+            --resource 499b84ac-1321-427f-aa17-267ca6975798 \
+            --query id -o tsv)"
+          echo "::notice title=Marketplace User ID::$id"
+          {
+            echo "## Marketplace publisher member id"
+            echo
+            echo '```'
+            echo "$id"
+            echo '```'
+            echo
+            echo "Paste into **Members → Add** on the \`nao7sep\` publisher, role **Contributor**."
+            echo "This is the Azure DevOps profile id — client/tenant/resource ids are rejected there."
+          } >> "$GITHUB_STEP_SUMMARY"
