@@ -57,6 +57,15 @@ RepoFocus asks the built-in Git extension to fetch repositories that have remote
 
 Authentication remains in the existing Git and VS Code flow. A fetch failure does not trigger repeated RepoFocus notifications: the affected repository stays visible with an error reason, the aggregate failure appears in copied diagnostics, and a later successful fetch clears the error.
 
+## What RepoFocus can reach
+
+Useful when judging whether something it did is a bug or a security problem:
+
+- It reads repository **state** through VS Code's built-in Git extension — branch, tracking status, and change counts. It does not read file contents, and it runs no Git command that writes to a repository.
+- It performs **fetches** against remotes already configured in your repositories, on the `repofocus.fetchIntervalMinutes` interval. Setting that to `0` disables extension-owned fetching entirely.
+- It stores one thing: whether filtering is on, in VS Code's per-workspace storage. It writes no files of its own and holds no credentials.
+- Its **diagnostics** command copies aggregate state only, and is designed to exclude repository paths, remote URLs, branch names, and file contents so the output is safe to paste into an issue. A payload that leaks any of those is a bug worth reporting privately.
+
 ## Recovery
 
 RepoFocus records only the repositories it hides. Disabling filtering, running **Show All Repositories**, losing compatibility, and extension shutdown all restore that owned set without closing Git repositories.

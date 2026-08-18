@@ -7,7 +7,6 @@
 
 # Development sources and tooling
 assets/**
-eslint.config.mjs
 esbuild.mjs
 scripts/**
 src/**

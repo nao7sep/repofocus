@@ -48,6 +48,8 @@ Because VS Code publishes no event when you hide or show a repository yourself, 
 
 MIT © 2026 Yoshinao Inoguchi
 
-## Support
+## Contact
 
-Questions, bug reports, and feature requests belong in [GitHub Issues](https://github.com/nao7sep/repofocus/issues). For anything security-related, see [SECURITY.md](SECURITY.md) — please do not open a public issue.
+Yoshinao Inoguchi — yoshinao@inoguchi.com — <https://inoguchi.com>
+
+Questions, bug reports, and feature requests belong in [GitHub Issues](https://github.com/nao7sep/repofocus/issues). For anything security-related, e-mail instead of opening an issue, and please redact real repository paths, remote URLs, and branch names — a synthetic reproduction is enough.

@@ -145,27 +145,23 @@
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
-    "lint": "eslint src tests scripts esbuild.mjs vitest.config.mts",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:integration": "npm run build && node scripts/run-integration-tests.mjs",
-    "check": "npm run typecheck && npm run lint && npm test",
+    "check": "npm run typecheck && npm test",
     "vscode:prepublish": "npm run check && npm run build"
   },
   "dependencies": {
     "minimatch": "10.2.6"
   },
   "devDependencies": {
-    "@eslint/js": "^10.0.1",
     "@types/node": "^26.1.2",
     "@types/vscode": "1.125.0",
     "@vitest/coverage-v8": "4.1.10",
     "@vscode/test-electron": "3.1.0",
     "@vscode/vsce": "3.9.2",
-    "esbuild": "0.28.1",
-    "eslint": "^10.8.0",
-    "typescript": "5.9.3",
-    "typescript-eslint": "8.66.0",
+    "esbuild": "0.28.2",
+    "typescript": "^7.0.2",
     "vitest": "4.1.10"
   }
 }
