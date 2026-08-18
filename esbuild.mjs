@@ -25,7 +25,11 @@ const shared = {
   external: ['vscode'],
   format: 'cjs',
   platform: 'node',
-  sourcemap: true,
+  // `external` writes the .map but omits the //# sourceMappingURL comment, which
+  // is what packaging needs: .vscodeignore excludes the map, so a linked comment
+  // would leave the shipped bundle pointing at a file that is not in the VSIX.
+  // Watch mode links it, because that is where a debugger actually attaches.
+  sourcemap: watch ? 'linked' : 'external',
   target: 'node22',
 };
 
