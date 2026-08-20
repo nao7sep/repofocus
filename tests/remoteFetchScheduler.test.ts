@@ -228,3 +228,70 @@ describe('RemoteFetchScheduler', () => {
     vi.useRealTimers();
   });
 });
+
+// A `git fetch` can hang rather than fail — SSH waiting at a passphrase prompt
+// on a non-tty, or a host that accepts the connection and never speaks. The
+// await was unbounded, so the worker never returned, `drain` never resolved,
+// and the `finally` that reschedules never ran: periodic auto-fetch stayed dead
+// for the rest of the session, silently, and only a window reload brought it
+// back. These pin the bound and, more importantly, the recovery.
+describe('RemoteFetchScheduler bounds a hung fetch', () => {
+  const hangsForever = (): Promise<void> => new Promise<void>(() => {});
+
+  it('gives up on a fetch that never settles, and records it as a failure', async () => {
+    const onError = vi.fn();
+    const scheduler = new RemoteFetchScheduler({
+      getTargets: () => [{ key: 'stuck', isLive: () => true, fetch: hangsForever }],
+      fetchTimeoutMilliseconds: 20,
+      onError,
+    });
+
+    // The whole point: this await used to never return.
+    await scheduler.refreshNow();
+
+    expect(scheduler.hasFailed('stuck')).toBe(true);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(String(onError.mock.calls[0][1])).toMatch(/did not finish within/i);
+    scheduler.dispose();
+  });
+
+  it('keeps fetching other repositories, and keeps working on the next run', async () => {
+    let healthyFetches = 0;
+    const scheduler = new RemoteFetchScheduler({
+      getTargets: () => [
+        { key: 'stuck', isLive: () => true, fetch: hangsForever },
+        {
+          key: 'healthy',
+          isLive: () => true,
+          fetch: () => {
+            healthyFetches += 1;
+            return Promise.resolve();
+          },
+        },
+      ],
+      concurrency: 1,
+      fetchTimeoutMilliseconds: 20,
+    });
+
+    await scheduler.refreshNow();
+    expect(healthyFetches).toBe(1);
+    expect(scheduler.hasFailed('healthy')).toBe(false);
+
+    // The recovery that the silent death took away: a later run still happens.
+    await scheduler.refreshNow();
+    expect(healthyFetches).toBe(2);
+    scheduler.dispose();
+  });
+
+  it('does not leave the timer pending after a fetch that finishes in time', async () => {
+    const scheduler = new RemoteFetchScheduler({
+      getTargets: () => [{ key: 'quick', isLive: () => true, fetch: () => Promise.resolve() }],
+      fetchTimeoutMilliseconds: 50_000,
+    });
+    // A leaked 50s timer would hold the process open; vitest would hang here
+    // rather than finishing this file.
+    await scheduler.refreshNow();
+    expect(scheduler.hasFailed('quick')).toBe(false);
+    scheduler.dispose();
+  });
+});

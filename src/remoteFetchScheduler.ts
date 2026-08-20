@@ -13,9 +13,37 @@ export interface RemoteFetchTarget {
   fetch(): Promise<void>;
 }
 
+/**
+ * How long one target's fetch may run before the scheduler stops waiting on it.
+ *
+ * `git fetch` can hang indefinitely rather than fail: SSH sitting at a host-key
+ * or passphrase prompt on a non-tty, or a host that accepts the TCP connection
+ * and then never speaks. An unbounded await on that does more than delay one
+ * repository — the worker never returns, so `drain` never resolves, so the
+ * `finally` that reschedules never runs, and periodic auto-fetch stays dead for
+ * the rest of the session with nothing logged and no badge to show it. Reloading
+ * the window was the only cure, and nothing told the user to.
+ *
+ * The underlying fetch cannot be cancelled — the Git extension's `fetch()` takes
+ * no cancellation token — so the bound abandons it rather than killing it: the
+ * target records a failure, the run completes, and the next tick is scheduled.
+ * Generous, because a first fetch of a large repository over a slow link is
+ * legitimately slow; this exists to end a wedge, not to police slowness.
+ */
+export const FETCH_TIMEOUT_MILLISECONDS = 120_000;
+
+export class FetchTimeoutError extends Error {
+  constructor(milliseconds: number) {
+    super(`Fetch did not finish within ${Math.round(milliseconds / 1000)} seconds.`);
+    this.name = 'FetchTimeoutError';
+  }
+}
+
 export interface RemoteFetchSchedulerOptions {
   readonly getTargets: () => readonly RemoteFetchTarget[];
   readonly concurrency?: number;
+  /** Overridable so tests can prove the bound without waiting it out. */
+  readonly fetchTimeoutMilliseconds?: number;
   readonly onError?: (target: RemoteFetchTarget, error: unknown) => void;
   readonly onSuccess?: (target: RemoteFetchTarget) => void;
 }
@@ -27,6 +55,7 @@ export class RemoteFetchScheduler implements DisposableLike {
   private requested = false;
   private disposed = false;
   private readonly concurrency: number;
+  private readonly fetchTimeoutMilliseconds: number;
   /**
    * The last attempt's outcome, held against the target that produced it rather
    * than against its key alone. A key names a repository URI, and a repository
@@ -57,6 +86,32 @@ export class RemoteFetchScheduler implements DisposableLike {
       throw new Error('Fetch concurrency must be a positive safe integer.');
     }
     this.concurrency = concurrency;
+    const timeout = options.fetchTimeoutMilliseconds ?? FETCH_TIMEOUT_MILLISECONDS;
+    if (!Number.isSafeInteger(timeout) || timeout < 1) {
+      throw new Error('Fetch timeout must be a positive safe integer.');
+    }
+    this.fetchTimeoutMilliseconds = timeout;
+  }
+
+  /**
+   * Await a fetch, but never past the bound. The timer is cleared on both paths
+   * so a completed fetch leaves nothing pending behind it.
+   */
+  private async fetchBounded(target: RemoteFetchTarget): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        target.fetch(),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(
+            () => reject(new FetchTimeoutError(this.fetchTimeoutMilliseconds)),
+            this.fetchTimeoutMilliseconds,
+          );
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
   }
 
   setInterval(intervalMilliseconds: number): void {
@@ -103,7 +158,7 @@ export class RemoteFetchScheduler implements DisposableLike {
           const target = targets[index];
           if (!target) return;
           try {
-            await target.fetch();
+            await this.fetchBounded(target);
             // A dead target records nothing: its key may already name a
             // different repository, and attributing this result to that one
             // would be worse than having no result at all.
