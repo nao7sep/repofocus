@@ -16,7 +16,7 @@ RepoFocus is on the [Visual Studio Marketplace](https://marketplace.visualstudio
 code --install-extension nao7sep.repofocus
 ```
 
-Every release also attaches a `.vsix` and its SHA-256 digest to [GitHub Releases](https://github.com/nao7sep/repofocus/releases), if you would rather install without the Marketplace: **Extensions → … → Install from VSIX…**.
+Every release also attaches a `.vsix` and its SHA-256 digest to [GitHub Releases](https://github.com/nao7sep/repofocus/releases/latest), if you would rather install without the Marketplace: **Extensions → … → Install from VSIX…**.
 
 Filtering turns itself on the first time you open Source Control. To switch it off — for this workspace, permanently, until you switch it back — run **RepoFocus: Toggle Filtering** from the Command Palette, or use the filter button in the Source Control title bar.
 
