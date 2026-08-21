@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { GitRepository } from '../src/gitApi';
 import {
-  probeVisibilityMappings,
-  RepositoriesAlreadyHiddenError,
+  mapVisibilityCommandsInOrder,
+  VisibilityProbeError,
   VisibilityProbeInterruptedError,
   VisibilityProbeLimitError,
   type VisibilityProbeLedger,
@@ -15,217 +15,187 @@ function repository(name: string, selected: () => boolean): GitRepository {
   } as unknown as GitRepository;
 }
 
-const fastTimings = { probeMilliseconds: 1, selectionTimeoutMilliseconds: 1 } as const;
-
-/**
- * Models the native behaviour measured in the Extension Host: hiding the
- * focused repository moves focus to another visible one, hiding the last
- * visible repository moves focus nowhere and leaves the stale value, and
- * revealing a hidden repository produces no focus change at all.
- */
-function nativeWorld(names: readonly string[], hiddenAtStart: readonly string[] = []) {
-  const visible = new Set(names.filter(name => !hiddenAtStart.includes(name)));
-  let selectedName = [...visible][0];
-  const targets = new Map(names.map((name, index) => [`toggle.scm${index}`, name]));
+function nativeWorld(
+  names: readonly string[],
+  commandOrder = names,
+  selectedAtStart = commandOrder[0],
+) {
+  const visible = new Set(names);
+  let selectedName: string | undefined = selectedAtStart;
+  const targets = new Map(commandOrder.map((name, index) => [`toggle.scm${index}`, name]));
   const repositories = names.map(name => repository(name, () => selectedName === name));
-  const execute = (command: string): Promise<void> => {
-    const target = targets.get(command);
-    if (target !== undefined) {
-      if (visible.delete(target)) {
-        if (selectedName === target) {
-          selectedName = names.find(name => visible.has(name)) ?? selectedName;
-        }
-      } else {
-        visible.add(target);
-      }
-    }
-    return Promise.resolve();
-  };
-  return { visible, repositories, commands: [...targets.keys()], execute };
-}
-
-function ledgerOver(execute: (command: string) => Promise<void>) {
-  const hidden = new Set<string>();
+  const executed: string[] = [];
   const ledger: VisibilityProbeLedger = {
-    hide: async command => { hidden.add(command); await execute(command); },
-    reveal: async command => { await execute(command); hidden.delete(command); },
+    hide: async command => {
+      executed.push(`hide:${command}`);
+      const target = targets.get(command);
+      if (!target) throw new Error(`Unknown command: ${command}`);
+      visible.delete(target);
+      if (selectedName === target) {
+        selectedName = commandOrder.find(name => visible.has(name));
+      }
+    },
+    reveal: async command => {
+      executed.push(`reveal:${command}`);
+      const target = targets.get(command);
+      if (!target) throw new Error(`Unknown command: ${command}`);
+      visible.add(target);
+    },
   };
-  return { ledger, hidden };
+  return {
+    commands: [...targets.keys()],
+    executed,
+    ledger,
+    repositories,
+    selected: () => selectedName,
+    visible,
+  };
 }
 
-describe('probeVisibilityMappings', () => {
-  it('maps every repository from an all-visible state without touching configuration', async () => {
+const fastTimings = {
+  selectionTimeoutMilliseconds: 20,
+  totalTimeoutMilliseconds: 1_000,
+} as const;
+
+describe('mapVisibilityCommandsInOrder', () => {
+  it.each([2, 3, 50])('maps %i repositories with exactly 3N - 3 bounded toggles', async count => {
+    const names = Array.from({ length: count }, (_, index) => `repo-${index}`);
+    const world = nativeWorld(names);
+
+    const mappings = await mapVisibilityCommandsInOrder(
+      world.repositories,
+      world.commands,
+      world.ledger,
+      fastTimings,
+    );
+
+    expect(mappings.map(mapping => mapping.command)).toEqual(world.commands);
+    expect(world.executed).toHaveLength(3 * count - 3);
+    expect(world.visible.size).toBe(1);
+  });
+
+  it('maps repositories in native selection order rather than Git API array order', async () => {
+    const names = ['alpha', 'beta', 'gamma', 'delta'];
+    const commandOrder = ['gamma', 'alpha', 'delta', 'beta'];
+    const world = nativeWorld(names, commandOrder);
+
+    const mappings = await mapVisibilityCommandsInOrder(
+      world.repositories,
+      world.commands,
+      world.ledger,
+      fastTimings,
+    );
+
+    expect(mappings.map(mapping => mapping.repository.rootUri.toString())).toEqual(
+      commandOrder.map(name => `file:///${name}`),
+    );
+    expect(world.executed[0]).toBe('hide:toggle.scm0');
+    expect(world.selected()).toBe('gamma');
+  });
+
+  it('fails without searching when native focus does not follow an isolated visibility change', async () => {
     const world = nativeWorld(['alpha', 'beta', 'gamma']);
-    const executed: string[] = [];
-    const { ledger, hidden } = ledgerOver(async command => {
-      executed.push(command);
-      await world.execute(command);
-    });
+    let hideCount = 0;
+    const ledger: VisibilityProbeLedger = {
+      hide: async command => {
+        hideCount += 1;
+        if (hideCount === 3) return;
+        await world.ledger.hide(command);
+      },
+      reveal: command => world.ledger.reveal(command),
+    };
 
-    const mappings = await probeVisibilityMappings(
+    await expect(mapVisibilityCommandsInOrder(
       world.repositories,
       world.commands,
       ledger,
       fastTimings,
-    );
+    )).rejects.toBeInstanceOf(VisibilityProbeError);
 
-    expect(mappings.map(m => [m.repository.rootUri.toString(), m.command])).toEqual([
-      ['file:///alpha', 'toggle.scm0'],
-      ['file:///beta', 'toggle.scm1'],
-      ['file:///gamma', 'toggle.scm2'],
-    ]);
-    // The last repository is identified by elimination, never left hidden.
-    expect([...world.visible]).toEqual(['gamma']);
-    expect([...hidden]).toEqual(['toggle.scm0', 'toggle.scm1']);
-    expect(executed.some(command => command.includes('setSelectionMode'))).toBe(false);
-  });
-
-  it('waits for a delayed native focus update before deciding a toggle did not match', async () => {
-    const names = ['alpha', 'beta'];
-    const visible = new Set(names);
-    let selectedName = names[0];
-    const repositories = names.map(name => repository(name, () => selectedName === name));
-    const targets = new Map(names.map((name, index) => [`toggle.scm${index}`, name]));
-    const { ledger } = ledgerOver(command => {
-      const target = targets.get(command);
-      if (target !== undefined && visible.has(target)) {
-        setTimeout(() => {
-          visible.delete(target);
-          if (selectedName === target) {
-            selectedName = names.find(name => visible.has(name)) ?? selectedName;
-          }
-        }, 20);
-      } else if (target !== undefined) {
-        visible.add(target);
-      }
-      return Promise.resolve();
-    });
-
-    const mappings = await probeVisibilityMappings(
-      repositories,
-      [...targets.keys()],
-      ledger,
-      { selectionTimeoutMilliseconds: 100 },
-    );
-
-    expect(mappings.map(mapping => [mapping.repository.rootUri.toString(), mapping.command])).toEqual([
-      ['file:///alpha', 'toggle.scm0'],
-      ['file:///beta', 'toggle.scm1'],
+    expect(hideCount).toBe(3);
+    expect(world.executed).toEqual([
+      'hide:toggle.scm0',
+      'hide:toggle.scm1',
+      'reveal:toggle.scm1',
+      'reveal:toggle.scm2',
     ]);
   });
 
-  it('reports repositories that were already hidden instead of guessing', async () => {
-    const world = nativeWorld(['alpha', 'beta', 'gamma'], ['gamma']);
-    const { ledger } = ledgerOver(world.execute);
-
-    await expect(probeVisibilityMappings(
-      world.repositories,
-      world.commands,
-      ledger,
-      fastTimings,
-    )).rejects.toBeInstanceOf(RepositoriesAlreadyHiddenError);
-  });
-
-  it('leaves the pre-existing hidden repository hidden when it declines', async () => {
-    const world = nativeWorld(['alpha', 'beta', 'gamma'], ['gamma']);
-    const { ledger, hidden } = ledgerOver(world.execute);
-
-    await probeVisibilityMappings(world.repositories, world.commands, ledger, fastTimings)
-      .catch(() => undefined);
-
-    expect(world.visible.has('gamma')).toBe(false);
-    // Everything the probe itself hid is still owned, so recovery can undo it.
-    expect([...hidden]).toEqual(['toggle.scm0']);
-  });
-
-  it('retains ownership of a hide whose native command rejected', async () => {
+  it('rejects command sets that do not cover repositories exactly once', async () => {
     const world = nativeWorld(['alpha', 'beta']);
-    const failure = new Error('native command failed');
-    const { ledger, hidden } = ledgerOver(command => command === 'toggle.scm0'
-      ? Promise.reject(failure)
-      : world.execute(command));
 
-    await expect(probeVisibilityMappings(
+    await expect(mapVisibilityCommandsInOrder(
       world.repositories,
-      world.commands,
-      ledger,
+      world.commands.slice(0, 1),
+      world.ledger,
       fastTimings,
-    )).rejects.toThrow(failure);
-    expect([...hidden]).toEqual(['toggle.scm0']);
+    )).rejects.toThrow('exactly one native visibility command');
+    expect(world.executed).toEqual([]);
   });
 
-  it('interrupts a stale probe while retaining ownership of its last hide', async () => {
+  it('rejects missing or ambiguous native selection', async () => {
+    const none = [repository('alpha', () => false), repository('beta', () => false)];
+    const both = [repository('alpha', () => true), repository('beta', () => true)];
+    const ledger: VisibilityProbeLedger = {
+      hide: vi.fn(() => Promise.resolve()),
+      reveal: vi.fn(() => Promise.resolve()),
+    };
+
+    await expect(mapVisibilityCommandsInOrder(
+      none,
+      ['toggle.scm0', 'toggle.scm1'],
+      ledger,
+      fastTimings,
+    )).rejects.toThrow('focus did not settle');
+    await expect(mapVisibilityCommandsInOrder(
+      both,
+      ['toggle.scm0', 'toggle.scm1'],
+      ledger,
+      fastTimings,
+    )).rejects.toThrow('focus did not settle');
+    expect(ledger.hide).toHaveBeenCalledTimes(2);
+  });
+
+  it('interrupts immediately after a stale hide so recovery retains ownership', async () => {
     const world = nativeWorld(['alpha', 'beta']);
     let current = true;
-    const { ledger, hidden } = ledgerOver(async command => {
-      await world.execute(command);
-      current = false;
-    });
+    const ledger: VisibilityProbeLedger = {
+      hide: async command => {
+        await world.ledger.hide(command);
+        current = false;
+      },
+      reveal: command => world.ledger.reveal(command),
+    };
 
-    await expect(probeVisibilityMappings(
+    await expect(mapVisibilityCommandsInOrder(
       world.repositories,
       world.commands,
       ledger,
       { ...fastTimings, isCurrent: () => current },
     )).rejects.toBeInstanceOf(VisibilityProbeInterruptedError);
-    expect([...hidden]).toEqual(['toggle.scm0']);
+    expect(world.executed).toEqual(['hide:toggle.scm0']);
   });
 
-  it('rejects when the command set cannot cover every repository exactly once', async () => {
-    const world = nativeWorld(['alpha', 'beta', 'gamma']);
-    const { ledger } = ledgerOver(world.execute);
-
-    await expect(probeVisibilityMappings(
-      world.repositories,
-      world.commands.slice(0, 2),
-      ledger,
-      fastTimings,
-    )).rejects.toThrow('exactly one native visibility command');
-  });
-
-  it('rejects when native focus never settles', async () => {
-    const repositories = [
-      repository('alpha', () => true),
-      repository('beta', () => true),
-    ];
-    const { ledger } = ledgerOver(() => Promise.resolve());
-
-    await expect(probeVisibilityMappings(
-      repositories,
-      ['toggle.scm0', 'toggle.scm1'],
-      ledger,
-      fastTimings,
-    )).rejects.toThrow('Native repository focus did not settle.');
-  });
-
-  it('stops before an unsettled command set can issue unbounded toggles', async () => {
-    const world = nativeWorld(['alpha', 'beta', 'gamma']);
-    const { ledger, hidden } = ledgerOver(() => Promise.resolve());
-
-    await expect(probeVisibilityMappings(
-      world.repositories,
-      world.commands,
-      ledger,
-      { ...fastTimings, maximumToggleAttempts: 2 },
-    )).rejects.toBeInstanceOf(VisibilityProbeLimitError);
-
-    expect(hidden.size).toBeLessThanOrEqual(2);
-  });
-
-  it('stops an unsettled probe at its total time bound', async () => {
+  it('bounds the total time spent waiting for native focus', async () => {
     vi.useFakeTimers();
-    const world = nativeWorld(['alpha', 'beta']);
-    const { ledger } = ledgerOver(() => Promise.resolve());
-    const probe = probeVisibilityMappings(
-      world.repositories,
-      world.commands,
-      ledger,
-      { probeMilliseconds: 1_000, totalTimeoutMilliseconds: 20 },
-    );
-    const result = expect(probe).rejects.toBeInstanceOf(VisibilityProbeLimitError);
+    try {
+      const repositories = [repository('alpha', () => false), repository('beta', () => false)];
+      const ledger: VisibilityProbeLedger = {
+        hide: vi.fn(() => Promise.resolve()),
+        reveal: vi.fn(() => Promise.resolve()),
+      };
+      const mapping = mapVisibilityCommandsInOrder(
+        repositories,
+        ['toggle.scm0', 'toggle.scm1'],
+        ledger,
+        { selectionTimeoutMilliseconds: 1_000, totalTimeoutMilliseconds: 20 },
+      );
+      const result = expect(mapping).rejects.toBeInstanceOf(VisibilityProbeLimitError);
 
-    await vi.advanceTimersByTimeAsync(30);
-    await result;
-    vi.useRealTimers();
+      await vi.advanceTimersByTimeAsync(30);
+      await result;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

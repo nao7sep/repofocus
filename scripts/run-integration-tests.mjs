@@ -18,7 +18,7 @@ const configuredVscodeExecutablePath = process.env.VSCODE_EXECUTABLE_PATH;
 const localVscodeExecutablePath = '/Applications/Visual Studio Code.app/Contents/MacOS/Code';
 const vscodeExecutablePath = configuredVscodeExecutablePath
   ?? (existsSync(localVscodeExecutablePath) ? localVscodeExecutablePath : undefined);
-const repositoryCount = Number(process.env.REPOFOCUS_INTEGRATION_REPOSITORY_COUNT ?? '15');
+const repositoryCount = Number(process.env.REPOFOCUS_INTEGRATION_REPOSITORY_COUNT ?? '50');
 
 if (!Number.isSafeInteger(repositoryCount) || repositoryCount < 2) {
   throw new Error('REPOFOCUS_INTEGRATION_REPOSITORY_COUNT must be an integer of at least 2.');

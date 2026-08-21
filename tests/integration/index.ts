@@ -47,6 +47,11 @@ export async function run(): Promise<void> {
   const expectedRepositoryCount = Number(process.env.REPOFOCUS_INTEGRATION_REPOSITORY_COUNT ?? '2');
   const initialFilteringTimeoutMilliseconds = process.platform === 'win32' ? 60_000 : 15_000;
   await vscode.commands.executeCommand('workbench.view.explorer');
+  await vscode.workspace.getConfiguration('git').update(
+    'autofetch',
+    false,
+    vscode.ConfigurationTarget.Workspace,
+  );
 
   const alphaPath = join(fixtureRoot, 'alpha');
   const betaPath = join(fixtureRoot, 'beta');
@@ -64,8 +69,17 @@ export async function run(): Promise<void> {
   }
   const extension = vscode.extensions.getExtension<RepoFocusExtensionApi>(extensionId);
   assert(extension, `Extension ${extensionId} was not loaded.`);
+  assert.equal(
+    extension.isActive,
+    false,
+    'RepoFocus must remain inactive until the user opens Source Control.',
+  );
+
+  // Opening Source Control here represents the user's pane choice. RepoFocus
+  // must not issue this command itself.
+  await vscode.commands.executeCommand('workbench.view.scm');
   const api = await waitFor(
-    'automatic RepoFocus activation',
+    'RepoFocus activation after Source Control opens',
     () => extension.isActive ? extension.exports : undefined,
   );
 
@@ -93,14 +107,6 @@ export async function run(): Promise<void> {
       return repository && api.getActionability(repository)?.actionable === false;
     }) ? true : undefined,
   );
-  for (const path of repositoryPaths) {
-    const repository = repositoryAt(api, path);
-    assert(repository && !api.isHiddenByRepoFocus(repository), 'Explorer startup must not initialize SCM visibility.');
-  }
-
-  // Opening Source Control here represents the user's pane choice. RepoFocus
-  // must not issue this command itself.
-  await vscode.commands.executeCommand('workbench.view.scm');
   try {
     await waitFor('all clean repositories to become hidden', () =>
       repositoryPaths.every(path => {
@@ -139,7 +145,7 @@ export async function run(): Promise<void> {
   }
   assert(
     Date.now() - initialSettleStarted < initialFilteringTimeoutMilliseconds,
-    `Fifteen-repository initial filtering must settle within `
+    `${expectedRepositoryCount}-repository initial filtering must settle within `
       + `${initialFilteringTimeoutMilliseconds / 1_000} seconds after Git discovery.`,
   );
 
@@ -155,24 +161,6 @@ export async function run(): Promise<void> {
     assert(repository && api.isHiddenByRepoFocus(repository), `Clean repository ${path} must be hidden.`);
   }
   const configuration = vscode.workspace.getConfiguration('repofocus');
-  await configuration.update(
-    'minimumRepositoryCount',
-    expectedRepositoryCount + 1,
-    vscode.ConfigurationTarget.Workspace,
-  );
-  await waitFor('the repository threshold to restore every repository', () =>
-    repositoryPaths.every(path => {
-      const repository = repositoryAt(api, path);
-      return repository && !api.isHiddenByRepoFocus(repository);
-    }) ? true : undefined,
-  );
-  await configuration.update('minimumRepositoryCount', 2, vscode.ConfigurationTarget.Workspace);
-  await waitFor('lowering the repository threshold to resume filtering', () =>
-    repositoryPaths.every(path => {
-      const repository = repositoryAt(api, path);
-      return repository && api.isHiddenByRepoFocus(repository);
-    }) ? true : undefined,
-  );
   assert.equal(api.git.repositories.length, before, 'Hiding must not remove repositories from the Git API.');
   await vscode.commands.executeCommand('repofocus.copyDiagnostics');
   const diagnostics = JSON.parse(await vscode.env.clipboard.readText()) as {
@@ -194,7 +182,25 @@ export async function run(): Promise<void> {
   execFileSync('git', ['add', 'tracked.txt'], { cwd: updaterPath });
   execFileSync('git', ['commit', '-m', 'incoming fixture'], { cwd: updaterPath });
   execFileSync('git', ['push'], { cwd: updaterPath });
+  const remoteHeadBeforeRefresh = execFileSync(
+    'git',
+    ['rev-parse', 'refs/remotes/origin/main'],
+    { cwd: alphaPath, encoding: 'utf8' },
+  ).trim();
   await vscode.commands.executeCommand('repofocus.refresh');
+  await api.waitForSettled();
+  const remoteHeadAfterRefresh = execFileSync(
+    'git',
+    ['rev-parse', 'refs/remotes/origin/main'],
+    { cwd: alphaPath, encoding: 'utf8' },
+  ).trim();
+  assert.equal(
+    remoteHeadAfterRefresh,
+    remoteHeadBeforeRefresh,
+    'RepoFocus Refresh must not fetch or advance remote-tracking refs.',
+  );
+  execFileSync('git', ['fetch'], { cwd: alphaPath });
+  await alpha.status();
   await waitFor('incoming-commit actionability', () =>
     api.getActionability(alpha)?.reasons.some(reason => reason.kind === 'incoming') ? true : undefined,
   );
@@ -202,9 +208,18 @@ export async function run(): Promise<void> {
   assert.equal(api.isHiddenByRepoFocus(alpha), false, 'A repository with an incoming commit must become visible.');
   execFileSync('git', ['merge', '--ff-only', 'origin/main'], { cwd: alphaPath });
   await alpha.status();
-  await waitFor('updated repository to become hidden', () =>
-    api.getActionability(alpha)?.actionable === false && api.isHiddenByRepoFocus(alpha) ? true : undefined,
-  );
+  try {
+    await waitFor('updated repository to become hidden', () =>
+      api.getActionability(alpha)?.actionable === false && api.isHiddenByRepoFocus(alpha) ? true : undefined,
+    );
+  } catch (error) {
+    await vscode.commands.executeCommand('repofocus.copyDiagnostics');
+    throw new Error(
+      `Updated repository did not hide: ${JSON.stringify(api.getActionability(alpha))} `
+        + `diagnostics=${await vscode.env.clipboard.readText()}`,
+      { cause: error },
+    );
+  }
   const cleanAlphaContents = await readFile(join(alphaPath, 'tracked.txt'), 'utf8');
 
   execFileSync('git', ['commit', '--allow-empty', '-m', 'outgoing fixture'], { cwd: alphaPath });
@@ -246,7 +261,7 @@ export async function run(): Promise<void> {
   assert.equal(api.isHiddenByRepoFocus(alpha), false, 'An actionable repository must be shown again.');
   assert.equal(api.isHiddenByRepoFocus(beta), true, 'The remaining clean repository must stay hidden.');
 
-  await vscode.commands.executeCommand('repofocus.showAll');
+  await vscode.commands.executeCommand('repofocus.toggle');
   await api.waitForSettled();
   assert.equal(api.isHiddenByRepoFocus(alpha), false);
   assert.equal(api.isHiddenByRepoFocus(beta), false, 'Show All Repositories must disable filtering and restore clean repositories.');
@@ -261,15 +276,10 @@ export async function run(): Promise<void> {
     api.getActionability(beta)?.reasons.some(reason => reason.kind === 'untracked') ? true : undefined,
   );
 
-  await configuration.update('includeUntrackedFiles', false, vscode.ConfigurationTarget.Workspace);
   await vscode.commands.executeCommand('repofocus.toggle');
   await api.waitForSettled();
   assert.equal(api.isHiddenByRepoFocus(alpha), false, 'The changed repository must remain visible.');
-  assert.equal(api.isHiddenByRepoFocus(beta), true, 'Excluded untracked files must not make a repository visible.');
-
-  await configuration.update('includeUntrackedFiles', true, vscode.ConfigurationTarget.Workspace);
-  await api.waitForSettled();
-  assert.equal(api.isHiddenByRepoFocus(beta), false, 'Changing policy must immediately reveal the newly actionable repository.');
+  assert.equal(api.isHiddenByRepoFocus(beta), false, 'Untracked files must make a repository visible.');
 
   await writeFile(join(alphaPath, 'tracked.txt'), cleanAlphaContents, 'utf8');
   await alpha.status();
@@ -304,7 +314,7 @@ export async function run(): Promise<void> {
     await configuration.update('alwaysShow', [], vscode.ConfigurationTarget.Workspace);
   }
 
-  await vscode.commands.executeCommand('repofocus.showAll');
+  await vscode.commands.executeCommand('repofocus.toggle');
   await api.waitForSettled();
   assert.equal(api.isHiddenByRepoFocus(reopenedAlpha), false);
   assert.equal(api.isHiddenByRepoFocus(beta), false);

@@ -1,4 +1,4 @@
-import type { ActionabilityReason, ActionabilityPolicy, RepositoryActionability } from './actionability';
+import type { ActionabilityReason, RepositoryActionability } from './actionability';
 
 export interface RepoFocusDiagnosticsInput {
   readonly extensionVersion: string;
@@ -13,12 +13,7 @@ export interface RepoFocusDiagnosticsInput {
   readonly nativeMappingState: string;
   readonly repositoryStates: readonly RepositoryActionability[];
   readonly hiddenByRepoFocusCount: number;
-  readonly remoteFailureCount: number;
-  readonly remotePendingFetchCount: number;
-  readonly policy: ActionabilityPolicy;
   readonly alwaysShowPatternCount: number;
-  readonly fetchIntervalMinutes: number;
-  readonly minimumRepositoryCount: number;
 }
 
 export function createDiagnostics(input: RepoFocusDiagnosticsInput): string {
@@ -43,14 +38,9 @@ export function createDiagnostics(input: RepoFocusDiagnosticsInput): string {
     repositoryCount: input.repositoryStates.length,
     actionableRepositoryCount: input.repositoryStates.filter(state => state.actionable).length,
     hiddenByRepoFocusCount: input.hiddenByRepoFocusCount,
-    remoteFailureCount: input.remoteFailureCount,
-    remotePendingFetchCount: input.remotePendingFetchCount,
     reasonCounts,
     settings: {
-      ...input.policy,
       alwaysShowPatternCount: input.alwaysShowPatternCount,
-      fetchIntervalMinutes: input.fetchIntervalMinutes,
-      minimumRepositoryCount: input.minimumRepositoryCount,
     },
   }, undefined, 2);
 }

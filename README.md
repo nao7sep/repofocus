@@ -1,48 +1,49 @@
 # RepoFocus
 
-Open a folder full of Git repositories and VS Code's Source Control view lists every single one — twenty entries, seventeen of which you haven't touched in weeks, and the three you are actually working in somewhere down the scroll. RepoFocus hides the quiet ones. A repository comes back the moment it has something waiting for you: local changes, a merge conflict, commits to push or pull, a branch you never published, a rebase you left half-finished. You can also pin repositories that should always stay in view.
+RepoFocus keeps VS Code's native Source Control view focused on Git repositories that need attention. Clean repositories disappear; repositories with conflicts, staged or unstaged changes, untracked files, a rebase, commits to push or pull, or an unpublished branch remain visible. Repository names or paths can also be pinned with one `alwaysShow` setting.
 
-It filters VS Code's *own* Source Control view rather than replacing it with a dashboard of its own, so a repository that reappears is the real thing — the same commit box, the same change groups, the same Git commands. Nothing is closed and nothing stops being watched: the built-in Git extension monitors a hidden repository exactly as it did before, which is why an edit to one brings it straight back. Your repositories can sit together under one parent folder or arrive as separate folders of a multi-root workspace; both work.
+It filters the Source Control view you already use rather than replacing it with a dashboard. Hidden repositories remain open and monitored by VS Code's built-in Git extension, so a local edit or a Git-state update makes an actionable repository reappear with its normal commit box, change groups, and commands.
 
-RepoFocus is for developers who keep many repositories open at once, and it is deliberately small — install it, and the first time you open Source Control it starts working. It is at `0.x`, in daily use by its author, and it reaches repository visibility through a VS Code internal rather than a public API, which is worth reading about under [Compatibility and safety](#compatibility-and-safety) before you adopt it.
+RepoFocus is deliberately opinionated: installing it delegates per-repository visibility to the extension. When filtering initializes or repository topology changes, RepoFocus reveals the native list, identifies its repositories, and applies the filter again. It does not fetch, run Git commands, inspect file contents, or manage VS Code's autofetch policy.
 
 ![VS Code's Source Control view with filtering off, listing every repository, beside the same view with RepoFocus on, showing only the three repositories that have changes.](docs/images/source-control.png)
 
 ## Install
 
-RepoFocus is on the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=nao7sep.repofocus). Open the Extensions view, search for **RepoFocus**, and install it — or from a terminal:
+RepoFocus is on the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=nao7sep.repofocus). Open the Extensions view, search for **RepoFocus**, and install it—or run:
 
 ```sh
 code --install-extension nao7sep.repofocus
 ```
 
-Every release also attaches a `.vsix` and its SHA-256 digest to [GitHub Releases](https://github.com/nao7sep/repofocus/releases/latest), if you would rather install without the Marketplace: **Extensions → … → Install from VSIX…**.
+Every release also attaches a `.vsix` and SHA-256 digest to [GitHub Releases](https://github.com/nao7sep/repofocus/releases/latest). Install one with **Extensions → … → Install from VSIX…**.
 
-Filtering turns itself on the first time you open Source Control. To switch it off — for this workspace, permanently, until you switch it back — run **RepoFocus: Toggle Filtering** from the Command Palette, or use the filter button in the Source Control title bar.
+Filtering turns on when you first open Source Control. Use **RepoFocus: Toggle Filtering** from the Command Palette or the filter button in the Source Control title bar to disable it for the current workspace until you turn it back on.
 
 ## Requirements
 
-- VS Code 1.131.0 or newer, on the desktop, with the built-in Git extension enabled.
-- A trusted local workspace. Virtual and untrusted workspaces are not supported.
-- Two or more Git repositories. Below that RepoFocus leaves everything visible, so opening a single repository is never affected.
-- Every Source Control provider in the window is a Git repository. VS Code's visibility commands cover all providers while RepoFocus can only read Git ones, so a workspace also running an SVN or Mercurial provider pauses filtering and says so rather than guessing.
-- VS Code's repository selection mode set to `multiple`, which is its default. RepoFocus stays out of the way when it is `single`. If the native repository list is already hidden when RepoFocus first maps it, RepoFocus performs at most one automatic reveal-all cycle per extension session; VS Code does not expose whether that state was stale or deliberately selected. The explicit reveal-all command uses the same mechanism after confirmation.
+- VS Code 1.131.0 or newer on the desktop, with the built-in Git extension enabled.
+- A trusted local workspace. Virtual and untrusted workspaces are unsupported.
+- At least two Git repositories. A single-repository workspace is left visible.
+- Git must be the only Source Control provider in the window. RepoFocus pauses instead of guessing when native visibility commands also cover a provider it cannot identify.
 
-Detecting commits to push or pull means fetching, so RepoFocus performs bounded background Git fetches and can trigger whatever authentication you already have configured for Git. Automatic fetching can be turned off and does not run while filtering is inactive or the VS Code window is in the background. A timed-out underlying fetch is never duplicated on a later interval.
+Incoming and outgoing status is whatever the built-in Git extension currently reports. VS Code autofetch, a manual Git fetch, or another tool may update that state; RepoFocus never does so itself.
 
-To build from source: Node.js 22 or newer, and npm.
+To build from source, use Node.js 22 or newer and npm.
 
 ## Compatibility and safety
 
-VS Code does not expose repository visibility through its public extension API, so RepoFocus drives the built-in Source Control visibility commands instead. That is the honest cost of filtering the native view rather than building a replacement for it, and the extension is written around it: it waits for the built-in Git extension to finish its initial repository scan, validates the visibility commands before using them, bounds both individual commands and the complete mapping probe, undoes its own visibility changes if validation or a later command fails, never closes a repository, and treats a state it could not evaluate as one that needs you.
+VS Code does not expose repository visibility through its public extension API, so RepoFocus uses bounded built-in Source Control commands. It activates only when Source Control is opened or its view command runs. Initialization waits for the built-in Git scan, makes every provider visible, and maps opaque visibility commands in linear work: `3N−3` reversible toggles for `N` repositories, plus the final filter. The release test exercises 50 repositories opened in scrambled order.
 
-One limitation is worth stating plainly. VS Code creates its internal per-repository visibility commands only after Source Control has been opened, so an extension cannot tell "the view hasn't been opened yet" apart from "these commands were renamed by a VS Code update". RepoFocus reports which state it believes it is in through **RepoFocus: Copy Diagnostics** and its output channel rather than pretending to know. A change to the surrounding command family *is* detected and reported as a compatibility failure.
+Every native command has a 10-second bound and the complete mapping has a 60-second bound. Lazy command registration gets one bounded five-second retry window. There are no polling loops, periodic audits, background fetches, or window-focus jobs. Normal Git-state events only schedule visibility work when a repository changes between clean and actionable.
 
-Because VS Code publishes no event when you hide or show a repository yourself, use **RepoFocus: Toggle Filtering** or **RepoFocus: Show All Repositories** while RepoFocus is active; the native menu behaves normally again once filtering is off.
+If VS Code's internal behavior does not match the validated contract, RepoFocus stops filtering and restores every repository it knows it hid. It never closes a repository. An unavailable or inconsistent Git state is treated as actionable so uncertainty remains visible.
+
+RepoFocus owns native repository visibility while filtering is active. Do not also hide repositories with VS Code's native menu; turn RepoFocus filtering off first if you want manual control. A topology change or **RepoFocus: Refresh** from a paused state establishes a fresh all-visible baseline and intentionally discards prior per-repository visibility choices.
 
 ## Documentation
 
-[docs/reference.md](docs/reference.md) covers exactly what counts as needing your attention, every setting and command, remote-fetch behavior, and how to recover if filtering gets stuck.
+[docs/reference.md](docs/reference.md) describes actionability, the `alwaysShow` setting, commands, visibility initialization, diagnostics, and recovery.
 
 ## License
 
@@ -52,4 +53,4 @@ MIT © 2026 Yoshinao Inoguchi
 
 Yoshinao Inoguchi — yoshinao@inoguchi.com — <https://inoguchi.com>
 
-Questions, bug reports, and feature requests belong in [GitHub Issues](https://github.com/nao7sep/repofocus/issues). For anything security-related, e-mail instead of opening an issue, and please redact real repository paths, remote URLs, and branch names — a synthetic reproduction is enough.
+Questions, bug reports, and feature requests belong in [GitHub Issues](https://github.com/nao7sep/repofocus/issues). For anything security-related, e-mail instead of opening an issue, and redact real repository paths, remote URLs, and branch names—a synthetic reproduction is enough.

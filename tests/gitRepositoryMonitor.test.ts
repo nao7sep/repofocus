@@ -42,7 +42,6 @@ function repository(name: string): { repository: GitRepository; changes: TestEve
       rootUri: { fsPath: `/${name}`, toString: () => `file:///${name}` },
       state,
       ui: { selected: false, onDidChange: () => ({ dispose() {} }) },
-      fetch: async () => {},
       status: async () => {},
     },
     changes,

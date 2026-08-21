@@ -19,16 +19,7 @@ describe('createDiagnostics', () => {
         { actionable: true, reasons: [{ kind: 'error', detail: '/private/repo: https://user:token@example.test' }] },
       ],
       hiddenByRepoFocusCount: 1,
-      remoteFailureCount: 1,
-      remotePendingFetchCount: 1,
-      policy: {
-        includeIncomingCommits: true,
-        includeOutgoingCommits: true,
-        includeUntrackedFiles: true,
-      },
       alwaysShowPatternCount: 2,
-      fetchIntervalMinutes: 5,
-      minimumRepositoryCount: 2,
     });
     const parsed = JSON.parse(diagnostics) as Record<string, unknown>;
 
@@ -37,9 +28,8 @@ describe('createDiagnostics', () => {
       repositoryCount: 3,
       actionableRepositoryCount: 2,
       hiddenByRepoFocusCount: 1,
-      remoteFailureCount: 1,
-      remotePendingFetchCount: 1,
       reasonCounts: { unstaged: 1, error: 1 },
+      settings: { alwaysShowPatternCount: 2 },
     });
     expect(diagnostics).not.toContain('/private/repo');
     expect(diagnostics).not.toContain('example.test');

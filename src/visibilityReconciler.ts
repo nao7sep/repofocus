@@ -79,6 +79,13 @@ export class VisibilityReconciler {
     this.requestReconcile();
   }
 
+  /** Accepts a completed native all-visible reset as the new owned baseline. */
+  acceptAllVisible(): void {
+    if (this.state !== 'active') return;
+    this.hiddenCommands.clear();
+    this.mappings.clear();
+  }
+
   setFilteringEnabled(enabled: boolean): Promise<void> {
     if (this.filteringEnabled === enabled) {
       // A failed reconciler retains commands whose restoration failed. The

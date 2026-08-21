@@ -1,9 +1,3 @@
-export interface ActionabilityPolicy {
-  readonly includeIncomingCommits: boolean;
-  readonly includeOutgoingCommits: boolean;
-  readonly includeUntrackedFiles: boolean;
-}
-
 export type BranchState =
   | { readonly kind: 'named'; readonly upstream: 'configured' | 'missing'; readonly ahead?: number; readonly behind?: number }
   | { readonly kind: 'detached' | 'unborn' }
@@ -46,7 +40,6 @@ function invalidCount(name: string, value: number | undefined): string | undefin
 
 export function classifyRepository(
   input: RepositoryActionabilityInput,
-  policy: ActionabilityPolicy,
 ): RepositoryActionability {
   const reasons: ActionabilityReason[] = [];
   const countErrors = [
@@ -58,14 +51,10 @@ export function classifyRepository(
   ].filter((error): error is string => error !== undefined);
 
   if (input.branch.kind === 'named' && input.branch.upstream === 'configured') {
-    if (policy.includeOutgoingCommits) {
-      const error = invalidCount('branch.ahead', input.branch.ahead);
-      if (error) countErrors.push(error);
-    }
-    if (policy.includeIncomingCommits) {
-      const error = invalidCount('branch.behind', input.branch.behind);
-      if (error) countErrors.push(error);
-    }
+    const aheadError = invalidCount('branch.ahead', input.branch.ahead);
+    if (aheadError) countErrors.push(aheadError);
+    const behindError = invalidCount('branch.behind', input.branch.behind);
+    if (behindError) countErrors.push(behindError);
   }
 
   const errors = [input.evaluationError, ...countErrors];
@@ -77,7 +66,7 @@ export function classifyRepository(
   if (input.mergeChanges > 0) reasons.push({ kind: 'conflicts', count: input.mergeChanges });
   if (input.stagedChanges > 0) reasons.push({ kind: 'staged', count: input.stagedChanges });
   if (input.unstagedChanges > 0) reasons.push({ kind: 'unstaged', count: input.unstagedChanges });
-  if (policy.includeUntrackedFiles && input.untrackedChanges > 0) {
+  if (input.untrackedChanges > 0) {
     reasons.push({ kind: 'untracked', count: input.untrackedChanges });
   }
   if (input.rebaseInProgress) reasons.push({ kind: 'rebase' });
@@ -85,13 +74,13 @@ export function classifyRepository(
 
   if (input.branch.kind === 'named') {
     if (input.branch.upstream === 'configured') {
-      if (policy.includeIncomingCommits && (input.branch.behind ?? 0) > 0) {
+      if ((input.branch.behind ?? 0) > 0) {
         reasons.push({ kind: 'incoming', count: input.branch.behind ?? 0 });
       }
-      if (policy.includeOutgoingCommits && (input.branch.ahead ?? 0) > 0) {
+      if ((input.branch.ahead ?? 0) > 0) {
         reasons.push({ kind: 'outgoing', count: input.branch.ahead ?? 0 });
       }
-    } else if (policy.includeOutgoingCommits && input.remoteCount > 0) {
+    } else if (input.remoteCount > 0) {
       reasons.push({ kind: 'unpublished' });
     }
   }

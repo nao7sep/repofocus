@@ -31,7 +31,8 @@
     "workspace"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onView:workbench.scm",
+    "onCommand:workbench.view.scm"
   ],
   "main": "./dist/extension.js",
   "extensionDependencies": [
@@ -46,9 +47,6 @@
     }
   },
   "contributes": {
-    "configurationDefaults": {
-      "scm.repositories.selectionMode": "multiple"
-    },
     "commands": [
       {
         "command": "repofocus.toggle",
@@ -63,18 +61,8 @@
         "icon": "$(refresh)"
       },
       {
-        "command": "repofocus.showAll",
-        "title": "Show All Repositories",
-        "category": "RepoFocus"
-      },
-      {
         "command": "repofocus.copyDiagnostics",
         "title": "Copy Diagnostics",
-        "category": "RepoFocus"
-      },
-      {
-        "command": "repofocus.revealAll",
-        "title": "Reveal All Repositories in Source Control",
         "category": "RepoFocus"
       }
     ],
@@ -95,32 +83,6 @@
     "configuration": {
       "title": "RepoFocus",
       "properties": {
-        "repofocus.includeUntrackedFiles": {
-          "type": "boolean",
-          "default": true,
-          "scope": "window",
-          "description": "Treat repositories containing untracked files as actionable."
-        },
-        "repofocus.includeOutgoingCommits": {
-          "type": "boolean",
-          "default": true,
-          "scope": "window",
-          "description": "Treat repositories with outgoing commits or an unpublished branch as actionable."
-        },
-        "repofocus.includeIncomingCommits": {
-          "type": "boolean",
-          "default": true,
-          "scope": "window",
-          "description": "Treat repositories with incoming commits as actionable."
-        },
-        "repofocus.fetchIntervalMinutes": {
-          "type": "integer",
-          "default": 5,
-          "minimum": 0,
-          "maximum": 1440,
-          "scope": "window",
-          "description": "Minutes between bounded background Git fetches used to detect incoming and outgoing commits. Set to 0 to disable automatic fetching."
-        },
         "repofocus.alwaysShow": {
           "type": "array",
           "default": [],
@@ -131,14 +93,6 @@
             "maxLength": 512
           },
           "description": "Git repository glob patterns that remain visible even when clean. A pattern matches a repository's path (workspace-relative where it has one) or its directory name, so a bare name such as 'my-repo' works in any workspace shape."
-        },
-        "repofocus.minimumRepositoryCount": {
-          "type": "integer",
-          "default": 2,
-          "minimum": 1,
-          "maximum": 100,
-          "scope": "window",
-          "description": "Minimum number of detected Git repositories required before RepoFocus filters clean repositories."
         }
       }
     }

@@ -1,7 +1,7 @@
 import type { GitRepository } from './gitApi';
 import {
-  probeVisibilityMappings,
-  RepositoriesAlreadyHiddenError,
+  mapVisibilityCommandsInOrder,
+  VisibilityProbeInterruptedError,
   type VisibilityProbeTimings,
 } from './visibilityBaseline';
 import {
@@ -16,32 +16,27 @@ export interface VisibilityInitialization {
   readonly revision: number;
 }
 
-/** Why filtering is not running, when nothing has failed outright. */
 export type VisibilityUnavailableReason =
   | 'awaiting-native-commands'
   | 'loading-repositories'
-  | 'repositories-already-hidden'
-  | 'single-selection-mode'
   | 'other-scm-providers';
 
 export interface VisibilityMappingCoordinatorOptions {
   readonly filteringRequested: () => boolean;
   readonly getCommands: () => Promise<readonly string[]>;
   readonly getRepositories: () => readonly GitRepository[];
-  readonly topologyReady?: () => boolean;
-  readonly recoverHiddenBaseline?: () => Promise<void>;
-  readonly minimumRepositoryCount: () => number;
-  readonly multipleSelectionMode: () => boolean;
+  readonly topologyReady: () => boolean;
+  readonly resetNativeVisibility: () => Promise<void>;
   readonly reconciler: VisibilityReconciler;
   readonly onInitialized?: (event: VisibilityInitialization) => void;
   readonly onUnavailable?: (reason: VisibilityUnavailableReason) => void;
   readonly probeTimings?: VisibilityProbeTimings;
   readonly commandRetryAttempts?: number;
   readonly commandRetryMilliseconds?: number;
-  readonly commandPollMilliseconds?: number;
-  readonly commandPollCeilingMilliseconds?: number;
   readonly topologySettleMilliseconds?: number;
 }
+
+const minimumRepositoryCount = 2;
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, milliseconds));
@@ -51,17 +46,10 @@ export class VisibilityMappingCoordinator {
   private revision = 0;
   private requestedAt = 0;
   private run: Promise<void> | undefined;
-  private commandPollTimer: ReturnType<typeof setTimeout> | undefined;
-  private commandPollDelay: number | undefined;
   private disposed = false;
   private hasBaseline = false;
-  private waitingForCommands = false;
   private unavailableReason: VisibilityUnavailableReason | undefined;
   private reportedReason: VisibilityUnavailableReason | undefined;
-  private mappedRepositoryKeys = new Set<string>();
-  private mappedCommands = new Set<string>();
-  private hiddenRecoveryUsed = false;
-  private auditRun: Promise<void> | undefined;
 
   constructor(private readonly options: VisibilityMappingCoordinatorOptions) {}
 
@@ -69,7 +57,6 @@ export class VisibilityMappingCoordinator {
     return this.hasBaseline;
   }
 
-  /** The state a diagnostics report needs to tell "waiting" from "broken". */
   get mappingState(): 'mapped' | 'incompatible' | VisibilityUnavailableReason | 'idle' {
     if (!this.options.reconciler.compatible) return 'incompatible';
     if (this.hasBaseline) return 'mapped';
@@ -77,95 +64,23 @@ export class VisibilityMappingCoordinator {
   }
 
   requestRefresh(): void {
-    this.queueRefresh(true, true);
-  }
-
-  /**
-   * The user-driven retry for conditions RepoFocus cannot observe changing:
-   * another extension's Source Control provider disappearing, or repositories
-   * being revealed through VS Code's own menu. Neither produces an event, so a
-   * manual refresh is the retry rather than a background poll.
-   */
-  retryIfUnavailable(): void {
-    if (this.mappingState === 'mapped') return;
-    this.requestRefresh();
-  }
-
-  /**
-   * A cheap convergence check for startup, remote-refresh completion, and a
-   * low-frequency timer. It never probes or toggles a healthy mapping.
-   */
-  async audit(): Promise<void> {
-    if (this.auditRun) return this.auditRun;
-    const operation = this.auditOnce();
-    const tracked = operation.finally(() => {
-      if (this.auditRun === tracked) this.auditRun = undefined;
-    });
-    this.auditRun = tracked;
-    return tracked;
-  }
-
-  private async auditOnce(): Promise<void> {
-    if (this.disposed || !this.options.reconciler.compatible || this.run) return;
-    const repositories = [...this.options.getRepositories()];
-    const shouldFilter = this.options.filteringRequested()
-      && repositories.length >= this.options.minimumRepositoryCount();
-    if (!shouldFilter) {
-      await this.updateFiltering();
-      return;
-    }
-    // Startup, Git-state, configuration, topology, native-command polling and
-    // explicit retry paths already own unavailable states. Retrying them from a
-    // timer would turn a paused hidden/unsupported state into endless probes or
-    // selection-mode resets.
-    if (this.options.topologyReady?.() === false || !this.hasBaseline) return;
-
-    try {
-      const discovery = discoverVisibilityCommands(
-        repositories.length,
-        await this.options.getCommands(),
-      );
-      const repositoryKeys = new Set(repositories.map(repository => repository.rootUri.toString()));
-      if (
-        discovery.kind === 'ready'
-        && sameSet(repositoryKeys, this.mappedRepositoryKeys)
-        && sameSet(new Set(discovery.commands), this.mappedCommands)
-        && this.options.reconciler.enabled
-      ) {
-        return;
-      }
-    } catch {
-      // The normal refresh path classifies and reports the exact failure.
-    }
-    this.requestRefresh();
-  }
-
-  private queueRefresh(settleTopology: boolean, resetCommandWait: boolean): void {
     if (this.disposed || !this.options.reconciler.compatible) return;
     this.revision += 1;
-    this.requestedAt = settleTopology
-      ? Date.now()
-      : Date.now() - (this.options.topologySettleMilliseconds ?? 1_000);
-    this.clearCommandPoll();
-    if (resetCommandWait) {
-      this.waitingForCommands = false;
-      this.commandPollDelay = undefined;
-    }
+    this.requestedAt = Date.now();
     this.hasBaseline = false;
     void this.options.reconciler.pause();
     this.startDrain();
   }
 
+  retryIfUnavailable(): void {
+    if (this.mappingState !== 'mapped') this.requestRefresh();
+  }
+
   async updateFiltering(): Promise<void> {
-    const repositories = this.options.getRepositories();
-    const shouldFilter = this.options.filteringRequested()
-      && repositories.length >= this.options.minimumRepositoryCount();
+    const shouldFilter = this.shouldFilter();
     if (!shouldFilter) {
-      this.clearCommandPoll();
-      this.waitingForCommands = false;
       await this.options.reconciler.setFilteringEnabled(false);
       await this.waitForIdle();
-      this.clearCommandPoll();
       await this.options.reconciler.resume();
       await this.options.reconciler.waitForIdle();
       return;
@@ -186,7 +101,10 @@ export class VisibilityMappingCoordinator {
     if (this.disposed) return;
     this.disposed = true;
     this.revision += 1;
-    this.clearCommandPoll();
+  }
+
+  private shouldFilter(repositories = this.options.getRepositories()): boolean {
+    return this.options.filteringRequested() && repositories.length >= minimumRepositoryCount;
   }
 
   private async drain(): Promise<void> {
@@ -202,7 +120,6 @@ export class VisibilityMappingCoordinator {
     }
   }
 
-  /** Reports a non-failure reason once per distinct state, never silently. */
   private reportUnavailable(reason: VisibilityUnavailableReason): void {
     this.unavailableReason = reason;
     if (this.reportedReason === reason) return;
@@ -218,25 +135,17 @@ export class VisibilityMappingCoordinator {
   }
 
   private async refreshOnce(revision: number): Promise<void> {
+    await this.options.reconciler.pause();
+    if (revision !== this.revision || this.disposed) return;
     const repositories = [...this.options.getRepositories()];
-    const shouldFilter = this.options.filteringRequested()
-      && repositories.length >= this.options.minimumRepositoryCount();
-    if (!shouldFilter) {
+    if (!this.shouldFilter(repositories)) {
       await this.options.reconciler.setFilteringEnabled(false);
       if (revision !== this.revision || this.disposed) return;
       await this.options.reconciler.resume();
       return;
     }
-
-    if (this.options.topologyReady?.() === false) {
+    if (!this.options.topologyReady()) {
       await this.standDown('loading-repositories', revision);
-      return;
-    }
-
-    // `single` mode can show only one repository at a time, so the whole model
-    // is impossible there. Recovery is handled outside this coordinator.
-    if (!this.options.multipleSelectionMode()) {
-      await this.standDown('single-selection-mode', revision);
       return;
     }
 
@@ -244,8 +153,6 @@ export class VisibilityMappingCoordinator {
     try {
       commands = await this.resolveSettledCommands(repositories.length, revision);
     } catch (error) {
-      // Another SCM provider is present: unsupported, not incompatible, so it
-      // stays recoverable instead of ending filtering for the window.
       if (error instanceof OtherScmProvidersError) {
         await this.standDown('other-scm-providers', revision);
         return;
@@ -254,24 +161,17 @@ export class VisibilityMappingCoordinator {
       return;
     }
     if (!commands) {
-      if (revision === this.revision && !this.disposed) {
-        this.waitingForCommands = true;
-        await this.standDown('awaiting-native-commands', revision);
-        this.scheduleCommandPoll();
-      }
+      await this.standDown('awaiting-native-commands', revision);
       return;
     }
     if (revision !== this.revision || this.disposed) return;
 
-    // Mapping by elimination needs the state RepoFocus found, not the one it
-    // created: a re-probe after a topology change would otherwise see its own
-    // hidden repositories and mistake them for the user's. The ledger restores
-    // exactly what RepoFocus hid, which is why no all-visible sweep is needed.
-    await this.options.reconciler.restoreOwned();
-    if (revision !== this.revision || this.disposed) return;
-
     try {
-      const mappings = await probeVisibilityMappings(
+      await this.options.resetNativeVisibility();
+      this.options.reconciler.acceptAllVisible();
+      if (revision !== this.revision || this.disposed) return;
+
+      const mappings = await mapVisibilityCommandsInOrder(
         repositories,
         commands,
         this.options.reconciler,
@@ -284,40 +184,16 @@ export class VisibilityMappingCoordinator {
 
       this.options.reconciler.setMappings(mappings);
       this.hasBaseline = true;
-      this.mappedRepositoryKeys = new Set(
-        mappings.map(mapping => mapping.repository.rootUri.toString()),
-      );
-      this.mappedCommands = new Set(mappings.map(mapping => mapping.command));
-      this.waitingForCommands = false;
       this.unavailableReason = undefined;
       this.reportedReason = undefined;
-      await this.options.reconciler.setFilteringEnabled(
-        this.options.filteringRequested()
-          && this.options.getRepositories().length >= this.options.minimumRepositoryCount(),
-      );
+      await this.options.reconciler.setFilteringEnabled(this.shouldFilter());
       await this.options.reconciler.resume();
       this.options.onInitialized?.({ repositoryCount: repositories.length, revision });
     } catch (error) {
       this.hasBaseline = false;
-      // The ledger knows exactly what the probe hid, whatever went wrong.
       await this.options.reconciler.restoreOwned();
       if (revision !== this.revision || this.disposed) return;
-      if (error instanceof RepositoriesAlreadyHiddenError) {
-        if (this.options.recoverHiddenBaseline && !this.hiddenRecoveryUsed) {
-          this.hiddenRecoveryUsed = true;
-          try {
-            await this.options.recoverHiddenBaseline();
-          } catch (recoveryError) {
-            await this.options.reconciler.failCompatibility(recoveryError);
-            return;
-          }
-          if (revision !== this.revision || this.disposed) return;
-          this.queueRefresh(false, false);
-          return;
-        }
-        await this.standDown('repositories-already-hidden', revision);
-        return;
-      }
+      if (error instanceof VisibilityProbeInterruptedError) return;
       await this.options.reconciler.failCompatibility(error);
     }
   }
@@ -326,7 +202,7 @@ export class VisibilityMappingCoordinator {
     repositoryCount: number,
     revision: number,
   ): Promise<readonly string[] | undefined> {
-    const attempts = this.waitingForCommands ? 1 : (this.options.commandRetryAttempts ?? 20);
+    const attempts = this.options.commandRetryAttempts ?? 100;
     const retryMilliseconds = this.options.commandRetryMilliseconds ?? 50;
     let lastError: unknown;
     let registrationPending = false;
@@ -357,41 +233,10 @@ export class VisibilityMappingCoordinator {
       : new Error('Native visibility command discovery failed.');
   }
 
-  /**
-   * Backs off rather than sweeping every command id twice a second forever: the
-   * usual reason for this state is simply that Source Control has not been
-   * opened yet, and that can last a whole session.
-   */
-  private scheduleCommandPoll(): void {
-    if (this.commandPollTimer || this.disposed || !this.options.reconciler.compatible) return;
-    const base = this.options.commandPollMilliseconds ?? 500;
-    const ceiling = this.options.commandPollCeilingMilliseconds ?? 10_000;
-    const next = this.commandPollDelay === undefined
-      ? base
-      : Math.min(this.commandPollDelay * 4, ceiling);
-    this.commandPollDelay = next;
-    this.commandPollTimer = setTimeout(() => {
-      this.commandPollTimer = undefined;
-      this.queueRefresh(false, false);
-    }, next);
-  }
-
   private startDrain(): void {
     if (this.run) return;
     this.run = this.drain().finally(() => {
       this.run = undefined;
     });
   }
-
-  private clearCommandPoll(): void {
-    if (!this.commandPollTimer) return;
-    clearTimeout(this.commandPollTimer);
-    this.commandPollTimer = undefined;
-  }
-}
-
-function sameSet(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
-  if (left.size !== right.size) return false;
-  for (const value of left) if (!right.has(value)) return false;
-  return true;
 }

@@ -1,15 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   classifyRepository,
-  type ActionabilityPolicy,
   type RepositoryActionabilityInput,
 } from '../src/actionability';
-
-const defaultPolicy: ActionabilityPolicy = {
-  includeIncomingCommits: true,
-  includeOutgoingCommits: true,
-  includeUntrackedFiles: true,
-};
 
 function cleanInput(
   overrides: Partial<RepositoryActionabilityInput> = {},
@@ -26,13 +19,13 @@ function cleanInput(
   };
 }
 
-function reasonKinds(input: RepositoryActionabilityInput, policy = defaultPolicy): string[] {
-  return classifyRepository(input, policy).reasons.map(reason => reason.kind);
+function reasonKinds(input: RepositoryActionabilityInput): string[] {
+  return classifyRepository(input).reasons.map(reason => reason.kind);
 }
 
 describe('classifyRepository', () => {
   it('classifies a synchronized repository as clean', () => {
-    expect(classifyRepository(cleanInput(), defaultPolicy)).toEqual({ actionable: false, reasons: [] });
+    expect(classifyRepository(cleanInput())).toEqual({ actionable: false, reasons: [] });
   });
 
   it.each([
@@ -88,27 +81,8 @@ describe('classifyRepository', () => {
     expect(reasonKinds(input)).toEqual([]);
   });
 
-  it('honors every optional policy independently', () => {
-    const input = cleanInput({
-      untrackedChanges: 1,
-      branch: { kind: 'named', upstream: 'configured', ahead: 2, behind: 3 },
-    });
-    const policy: ActionabilityPolicy = {
-      includeIncomingCommits: false,
-      includeOutgoingCommits: false,
-      includeUntrackedFiles: false,
-    };
-
-    expect(reasonKinds(input, policy)).toEqual([]);
-  });
-
-  it('uses the outgoing policy for unpublished branches', () => {
-    const input = cleanInput({ branch: { kind: 'named', upstream: 'missing' } });
-    expect(reasonKinds(input, { ...defaultPolicy, includeOutgoingCommits: false })).toEqual([]);
-  });
-
   it('keeps an evaluation failure visible', () => {
-    const result = classifyRepository(cleanInput({ evaluationError: 'Git state unavailable.' }), defaultPolicy);
+    const result = classifyRepository(cleanInput({ evaluationError: 'Git state unavailable.' }));
     expect(result.actionable).toBe(true);
     expect(result.reasons).toEqual([{ kind: 'error', detail: 'Git state unavailable.' }]);
   });
@@ -131,9 +105,4 @@ describe('classifyRepository', () => {
     expect(reasonKinds(cleanInput(overrides))).toContain('error');
   });
 
-  it('does not require disabled remote counts', () => {
-    const input = cleanInput({ branch: { kind: 'named', upstream: 'configured' } });
-    const policy = { ...defaultPolicy, includeIncomingCommits: false, includeOutgoingCommits: false };
-    expect(reasonKinds(input, policy)).toEqual([]);
-  });
 });
