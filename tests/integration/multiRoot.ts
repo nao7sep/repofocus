@@ -10,14 +10,10 @@
 // inside a multi-root folder, which is why the extension now omits the argument
 // and lets VS Code's own multi-root-aware default apply.)
 //
-// The consequence is a real gap, tracked in the release plan rather than
-// asserted away here: `repofocus.alwaysShow` is documented as taking
-// "workspace-relative" globs, but in this shape only an ABSOLUTE pattern can
-// match, and absolute patterns are machine-specific. This test pins the
-// behaviour that exists today so the gap cannot close by accident unnoticed.
-//
-// Both fixture repositories are deliberately named `shared`, so any matching
-// that fell back to a bare directory name would reveal both and fail here.
+// RepoFocus therefore checks both VS Code's path value and the repository's
+// directory name. This fixture uses an absolute pattern to target only one of
+// two same-named roots; the unit suite separately covers portable bare-name
+// fallback.
 
 import { strict as assert } from 'node:assert';
 import { writeFile } from 'node:fs/promises';
@@ -79,8 +75,7 @@ export async function run(): Promise<void> {
   const first = await waitFor('first repository to open', () => repositoryAt(api, firstRoot));
   const second = await waitFor('second repository to open', () => repositoryAt(api, secondRoot));
 
-  // The strings alwaysShow actually matches against, computed exactly as the
-  // extension computes them.
+  // The path candidates alwaysShow receives from VS Code.
   const firstMatchable = vscode.workspace.asRelativePath(first.rootUri.fsPath);
   const secondMatchable = vscode.workspace.asRelativePath(second.rootUri.fsPath);
   assert.notEqual(
@@ -88,10 +83,9 @@ export async function run(): Promise<void> {
     secondMatchable,
     'Repositories in different roots must be separately targetable.',
   );
-  // Pin the surprise: a folder-root repository has no relative form, so both
-  // repositories are addressed by absolute path even though the setting is
-  // documented as workspace-relative. If VS Code ever starts returning a real relative
-  // form here, this fails and the documented contract can be revisited.
+  // Pin the surprise: a folder-root repository has no relative path candidate.
+  // RepoFocus's directory-name candidate remains portable, while an absolute
+  // pattern can still distinguish two roots that share the same directory name.
   assert.ok(
     isAbsolute(firstMatchable) && basename(firstMatchable) === 'shared',
     `A folder-root repository is matched by absolute path today, got "${firstMatchable}".`,
@@ -114,9 +108,8 @@ export async function run(): Promise<void> {
     throw new Error(`${(error as Error).message} State: ${describe()}`, { cause: error });
   }
 
-  // Target ONLY the first. The payoff assertion is the second staying hidden —
-  // both directories are named `shared`, so any matching that degraded to a bare
-  // directory name would reveal both and fail here.
+  // Target only the first with its absolute candidate. The payoff assertion is
+  // that the same-named second repository stays hidden.
   await configuration.update('alwaysShow', [firstMatchable], vscode.ConfigurationTarget.Workspace);
   await waitFor('the targeted repository to become visible', () =>
     api.getActionability(first)?.reasons.some(reason => reason.kind === 'always-show')

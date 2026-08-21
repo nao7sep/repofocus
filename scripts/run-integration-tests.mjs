@@ -7,6 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { runTests } from '@vscode/test-electron';
 
 const projectRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
+const extensionDevelopmentPath = resolve(
+  process.env.REPOFOCUS_INTEGRATION_EXTENSION_PATH ?? projectRoot,
+);
 const fixtureRoot = await mkdtemp(join(tmpdir(), 'repofocus-integration-'));
 const remoteRoot = await mkdtemp(join(tmpdir(), 'repofocus-remotes-'));
 // The multi-root fixture's two folders must live under genuinely separate
@@ -63,7 +66,7 @@ try {
 
   await runTests({
     ...(vscodeExecutablePath ? { vscodeExecutablePath } : { version: '1.131.0' }),
-    extensionDevelopmentPath: projectRoot,
+    extensionDevelopmentPath,
     extensionTestsPath: join(projectRoot, 'dist-tests', 'integration.js'),
     extensionTestsEnv: {
       REPOFOCUS_INTEGRATION_ROOT: fixtureRoot,
@@ -96,7 +99,7 @@ try {
 
   await runTests({
     ...(vscodeExecutablePath ? { vscodeExecutablePath } : { version: '1.131.0' }),
-    extensionDevelopmentPath: projectRoot,
+    extensionDevelopmentPath,
     extensionTestsPath: join(projectRoot, 'dist-tests', 'multiRoot.js'),
     extensionTestsEnv: {
       REPOFOCUS_MULTIROOT_FIRST: firstMultiRootFolder,
