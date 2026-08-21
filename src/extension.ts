@@ -123,7 +123,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
     }
   };
   const recoverHiddenBaseline = async (): Promise<void> => {
-    logger.warn('Resetting native repository visibility after detecting a hidden startup state.');
+    logger.warn('Resetting native repository visibility after detecting a hidden native state.');
     await resetAllNativeVisibility();
     logger.info('Native repository visibility reset completed.');
   };
@@ -222,9 +222,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
     },
     onRepositoryReplaced: () => {
       if (!monitorReady) return;
-      logger.debug('Git repository observation replaced.', {
+      logger.info('Git repository topology changed.', {
+        change: 'replaced',
         repositoryCount: monitor.repositories.length,
       });
+      // A same-URI provider can receive a new native visibility command even
+      // though the stable repository set is unchanged. Coalesce a fresh mapping
+      // instead of retaining a command that may now name nothing.
+      visibility.requestRefresh();
     },
     onRepositoryChanged: evaluateRepository,
     onRepositoryClosed: repository => {
@@ -366,8 +371,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
     }),
     vscode.commands.registerCommand('repofocus.copyDiagnostics', copyDiagnostics),
     vscode.commands.registerCommand('repofocus.revealAll', async () => {
-      // The only mechanism VS Code exposes for restoring an all-visible list,
-      // and it writes a setting — so it happens on an explicit act, disclosed.
+      // The only mechanism VS Code exposes for restoring an all-visible list.
+      // This explicit path confirms the setting write before performing it.
       const confirmed = await vscode.window.showWarningMessage(
         'Reveal every repository in the Source Control Repositories view?',
         {

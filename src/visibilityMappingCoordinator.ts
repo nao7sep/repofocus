@@ -223,7 +223,7 @@ export class VisibilityMappingCoordinator {
     }
 
     // `single` mode can show only one repository at a time, so the whole model
-    // is impossible there. RepoFocus reads the setting and never writes it.
+    // is impossible there. Recovery is handled outside this coordinator.
     if (!this.options.multipleSelectionMode()) {
       await this.standDown('single-selection-mode', revision);
       return;

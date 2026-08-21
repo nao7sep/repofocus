@@ -3,6 +3,8 @@ import { selectionModeCommands } from './visibilityCommandResolver';
 
 export type RepositorySelectionMode = 'multiple' | 'single';
 
+const defaultTimeoutMilliseconds = 60_000;
+
 export interface NativeVisibilityResetOptions {
   readonly executeCommand: (command: string) => Promise<void>;
   readonly getSelectionMode: () => string;
@@ -26,7 +28,7 @@ async function setSelectionMode(
   options: NativeVisibilityResetOptions,
   mode: RepositorySelectionMode,
 ): Promise<void> {
-  const timeoutMilliseconds = options.timeoutMilliseconds ?? 5_000;
+  const timeoutMilliseconds = options.timeoutMilliseconds ?? defaultTimeoutMilliseconds;
   let subscription: DisposableLike | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
