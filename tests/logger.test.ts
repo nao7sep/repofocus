@@ -43,6 +43,19 @@ describe('Logger', () => {
     });
   });
 
+  it('redacts circular structured fields without failing the log event', () => {
+    const { lines, logger } = capture();
+    const circular: Record<string, unknown> = { label: 'kept', token: 'hidden' };
+    circular.self = circular;
+
+    expect(() => logger.info('Circular probe', { circular })).not.toThrow();
+    expect(JSON.parse(lines[0] ?? '')).toMatchObject({
+      level: 'info',
+      message: 'Circular probe',
+      circular: { label: 'kept', token: '[redacted]', self: '[circular]' },
+    });
+  });
+
   it('records error type, message, stack, and cause', () => {
     const { lines, logger } = capture();
     logger.error('Compatibility failed', new Error('outer', { cause: new TypeError('inner') }));

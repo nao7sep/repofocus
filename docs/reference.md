@@ -42,7 +42,7 @@ For two or more Git repositories, RepoFocus first establishes an all-visible bas
 
 This takes exactly `3N−3` reversible mapping toggles for `N` repositories rather than a quadratic command-by-repository search. The final reconciliation hides clean repositories. Mapping runs only after initialization, stable repository topology changes, a user selection-mode change that leaves multiple mode, or an explicit retry from a paused state.
 
-Each native command has a 10-second execution bound. The selection after each isolating change gets 1 second to settle, the complete mapping gets 60 seconds, and lazy command registration gets at most 100 attempts spaced 50 milliseconds apart. A topology revision interrupts stale work. RepoFocus serializes native commands, coalesces topology bursts, and restores its owned hides before stopping on failure.
+Each native command has a 10-second execution bound. The selection after each isolating change gets 1 second to settle, the complete mapping gets 60 seconds, and lazy command registration gets at most 100 attempts spaced 50 milliseconds apart. A topology revision interrupts stale work. RepoFocus serializes native commands, coalesces topology bursts, and restores its owned hides before stopping on failure. If a toggle rejects, its outcome is unknown: RepoFocus does not invert it again, waits up to one additional command bound for the underlying operation to settle, and uses the selection-mode reset to establish a known all-visible state. A command that never settles leaves visibility reported as unknown without further toggles.
 
 There is no periodic audit, command polling after the initial retry window, window-focus job, or network scheduler. Git-state events update one repository's classification; visibility reconciliation runs only when that repository crosses between clean and actionable.
 
@@ -61,7 +61,7 @@ There is no periodic audit, command polling after the initial retry window, wind
 
 ## Recovery
 
-Disabling filtering or deactivating the extension restores every repository RepoFocus records as hidden. A native compatibility failure also attempts that restoration, reports once, and remains failed for the window so it cannot loop.
+Disabling filtering or deactivating the extension restores every confirmed hide in RepoFocus's command ledger. A native compatibility failure also attempts that restoration and remains failed for the window so it cannot loop. Because native visibility commands are non-idempotent toggles, a rejected toggle is recovered through an all-visible selection-mode reset rather than a compensating toggle. If the underlying command does not settle within the recovery bound, RepoFocus leaves the state failed, reports the unknown visibility count, and issues no more native visibility commands.
 
 If filtering is paused because repositories are still loading, Source Control commands are not registered, or another provider is present, leave Source Control open and run **RepoFocus: Refresh** after the condition changes. If compatibility failed, copy diagnostics and reload the window. Report repeatable failures at [GitHub Issues](https://github.com/nao7sep/repofocus/issues).
 

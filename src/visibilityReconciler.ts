@@ -10,6 +10,8 @@ export interface VisibilityFailure {
 
 export interface VisibilityReconcilerOptions {
   readonly toggle: ToggleVisibility;
+  /** Re-establishes a known all-visible state without relying on another toggle. */
+  readonly resetToAllVisible?: () => Promise<void>;
   readonly onError?: (error: Error, failure: VisibilityFailure) => void;
 }
 
@@ -40,6 +42,7 @@ export class VisibilityReconciler {
   private paused = false;
   private requested = false;
   private scheduled = false;
+  private ambiguousRecovery: Promise<void> | undefined;
   private queue: Promise<void> = Promise.resolve();
 
   constructor(private readonly options: VisibilityReconcilerOptions) {}
@@ -56,19 +59,23 @@ export class VisibilityReconciler {
     return this.hiddenCommands.size;
   }
 
-  /**
-   * Executes a hide and records it before the command runs. A rejected toggle
-   * leaves the record in place so recovery retries it: a repository wrongly
-   * believed hidden is revealed again, while the opposite mistake would leave a
-   * changed repository invisible.
-   */
   async hide(command: string): Promise<void> {
     this.hiddenCommands.add(command);
-    await this.options.toggle(command);
+    try {
+      await this.options.toggle(command);
+    } catch (error) {
+      await this.failAmbiguousToggle(error);
+      throw error;
+    }
   }
 
   async reveal(command: string): Promise<void> {
-    await this.options.toggle(command);
+    try {
+      await this.options.toggle(command);
+    } catch (error) {
+      await this.failAmbiguousToggle(error);
+      throw error;
+    }
     this.hiddenCommands.delete(command);
   }
 
@@ -210,30 +217,52 @@ export class VisibilityReconciler {
           await this.reveal(mapping.command);
         }
       } catch (error) {
-        await this.handleToggleFailure(error);
+        // hide()/reveal() already stopped filtering and attempted a known-state
+        // reset. Do not compensate for an ambiguous toggle with another toggle.
         return;
       }
     }
   }
 
-  private async handleToggleFailure(error: unknown): Promise<void> {
+  private failAmbiguousToggle(error: unknown): Promise<void> {
+    if (this.ambiguousRecovery) return this.ambiguousRecovery;
     if (this.state === 'active') {
       this.state = 'failed';
-      this.options.onError?.(asError(error), { strandedCommandCount: this.hiddenCommands.size });
     }
+    this.options.onError?.(asError(error), { strandedCommandCount: this.hiddenCommands.size });
     this.requested = false;
-    await this.restoreOwnedCommands();
+    const recovery = this.resetAfterAmbiguousToggle();
+    this.ambiguousRecovery = recovery;
+    return recovery;
+  }
+
+  private async resetAfterAmbiguousToggle(): Promise<void> {
+    if (!this.options.resetToAllVisible) return;
+    try {
+      await this.options.resetToAllVisible();
+      this.hiddenCommands.clear();
+      this.mappings.clear();
+    } catch (error) {
+      this.options.onError?.(
+        new Error('Failed to establish an all-visible baseline after an ambiguous native toggle.', {
+          cause: asError(error),
+        }),
+        { strandedCommandCount: this.hiddenCommands.size },
+      );
+    }
   }
 
   private async restoreOwnedCommands(): Promise<void> {
+    // Once a toggle outcome is ambiguous, the ledger is no longer safe to
+    // invert. The one all-visible reset is the only permitted recovery.
+    if (this.ambiguousRecovery) return;
     for (const command of [...this.hiddenCommands]) {
       try {
         await this.reveal(command);
       } catch (error) {
-        this.options.onError?.(
-          new Error('Failed to restore a repository hidden by RepoFocus.', { cause: asError(error) }),
-          { strandedCommandCount: this.hiddenCommands.size },
-        );
+        // reveal() has already invalidated the toggle ledger and attempted the
+        // only safe recovery. Continuing would compound an unknown native state.
+        return;
       }
     }
   }

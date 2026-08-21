@@ -37,7 +37,7 @@ VS Code does not expose repository visibility through its public extension API, 
 
 Every native command has a 10-second bound and the complete mapping has a 60-second bound. Lazy command registration gets one bounded five-second retry window. There are no polling loops, periodic audits, background fetches, or window-focus jobs. Normal Git-state events only schedule visibility work when a repository changes between clean and actionable.
 
-If VS Code's internal behavior does not match the validated contract, RepoFocus stops filtering and restores every repository it knows it hid. It never closes a repository. An unavailable or inconsistent Git state is treated as actionable so uncertainty remains visible.
+If VS Code's internal behavior does not match the validated contract, RepoFocus stops filtering. It restores confirmed hides through their known command ledger. A rejected toggle has an ambiguous outcome, so RepoFocus never retries that inversion: it waits for the native command to settle, re-establishes the all-visible selection-mode baseline, and remains stopped. If the native command never settles, RepoFocus reports that visibility is unknown instead of issuing more toggles. It never closes a repository. An unavailable or inconsistent Git state is treated as actionable so uncertainty remains visible.
 
 RepoFocus owns native repository visibility while filtering is active. Do not also hide repositories with VS Code's native menu; turn RepoFocus filtering off first if you want manual control. A topology change or **RepoFocus: Refresh** from a paused state establishes a fresh all-visible baseline and intentionally discards prior per-repository visibility choices.
 

@@ -5,7 +5,10 @@ import { createDiagnostics } from './diagnostics';
 import type { GitApi, GitExtension, GitRepository } from './gitApi';
 import { GitRepositoryMonitor } from './gitRepositoryMonitor';
 import { Logger } from './logger';
-import { NativeVisibilityCommandExecutor } from './nativeVisibilityCommandExecutor';
+import {
+  NativeVisibilityCommandExecutor,
+  NATIVE_VISIBILITY_COMMAND_TIMEOUT_MILLISECONDS,
+} from './nativeVisibilityCommandExecutor';
 import { NativeVisibilityResetter } from './nativeVisibilityReset';
 import { toActionabilityInput } from './repositoryStateAdapter';
 import { VisibilityMappingCoordinator } from './visibilityMappingCoordinator';
@@ -54,8 +57,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
   let alwaysShowMatcher = createAlwaysShowMatcher(alwaysShowPatterns);
   let compatibilityFailureReported = false;
 
+  const readSelectionMode = (): string =>
+    vscode.workspace.getConfiguration('scm')
+      .get<string>('repositories.selectionMode', 'multiple');
+  const nativeVisibilityResetter = new NativeVisibilityResetter({
+    executeCommand: command => nativeVisibilityCommands.execute(command),
+    getSelectionMode: readSelectionMode,
+    onDidChangeSelectionMode: listener => vscode.workspace.onDidChangeConfiguration(event => {
+      if (event.affectsConfiguration('scm.repositories.selectionMode')) listener();
+    }),
+  });
+
   const reconciler = new VisibilityReconciler({
     toggle: command => nativeVisibilityCommands.execute(command),
+    resetToAllVisible: async () => {
+      logger.warn('Recovering an ambiguous native visibility result with an all-visible reset.');
+      await nativeVisibilityCommands.waitForIdle(NATIVE_VISIBILITY_COMMAND_TIMEOUT_MILLISECONDS);
+      await nativeVisibilityResetter.reset();
+    },
     onError: (error, failure) => {
       logger.error('Native visibility compatibility failed.', error, {
         strandedCommandCount: failure.strandedCommandCount,
@@ -85,17 +104,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
   let filteringEnabled = context.workspaceState.get(filteringStateKey, true);
   await vscode.commands.executeCommand('setContext', 'repofocus.compatible', true);
   await vscode.commands.executeCommand('setContext', 'repofocus.filteringEnabled', filteringEnabled);
-
-  const readSelectionMode = (): string =>
-    vscode.workspace.getConfiguration('scm')
-      .get<string>('repositories.selectionMode', 'multiple');
-  const nativeVisibilityResetter = new NativeVisibilityResetter({
-    executeCommand: command => nativeVisibilityCommands.execute(command),
-    getSelectionMode: readSelectionMode,
-    onDidChangeSelectionMode: listener => vscode.workspace.onDidChangeConfiguration(event => {
-      if (event.affectsConfiguration('scm.repositories.selectionMode')) listener();
-    }),
-  });
 
   let monitor: GitRepositoryMonitor;
   const visibility = new VisibilityMappingCoordinator({
@@ -191,6 +199,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
   };
 
   const copyDiagnostics = async (): Promise<void> => {
+    logger.info('Copy diagnostics requested.');
     const diagnostics = createDiagnostics({
       extensionVersion,
       vscodeVersion: vscode.version,
@@ -205,7 +214,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
       hiddenByRepoFocusCount: reconciler.hiddenRepositoryCount,
       alwaysShowPatternCount: alwaysShowPatterns.length,
     });
-    await vscode.env.clipboard.writeText(diagnostics);
+    try {
+      await vscode.env.clipboard.writeText(diagnostics);
+    } catch (error) {
+      logger.error('Copy diagnostics failed.', error);
+      throw error;
+    }
+    logger.info('Copy diagnostics completed.', { characterCount: diagnostics.length });
     void vscode.window.showInformationMessage('RepoFocus diagnostics copied to the clipboard.');
   };
 

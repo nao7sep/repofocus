@@ -14,6 +14,13 @@ export class NativeVisibilityCommandBusyError extends Error {
   }
 }
 
+export class NativeVisibilityCommandIdleTimeoutError extends Error {
+  constructor(milliseconds: number) {
+    super(`The active native visibility command did not settle within ${milliseconds} milliseconds.`);
+    this.name = 'NativeVisibilityCommandIdleTimeoutError';
+  }
+}
+
 export interface NativeVisibilityCommandExecutorOptions {
   readonly execute: (command: string) => Promise<void>;
   readonly timeoutMilliseconds?: number;
@@ -57,6 +64,33 @@ export class NativeVisibilityCommandExecutor {
           timer = setTimeout(() => reject(
             new NativeVisibilityCommandTimeoutError(command, this.timeoutMilliseconds),
           ), this.timeoutMilliseconds);
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Waits for an already-started native command to settle without starting or
+   * retrying anything. Recovery uses this after a caller-facing timeout so it
+   * can establish a known baseline only after the ambiguous operation ends.
+   */
+  async waitForIdle(timeoutMilliseconds: number): Promise<void> {
+    if (!Number.isSafeInteger(timeoutMilliseconds) || timeoutMilliseconds < 1) {
+      throw new Error('Native visibility idle timeout must be a positive safe integer.');
+    }
+    const active = this.active;
+    if (!active) return;
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        active.catch(() => undefined),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(
+            new NativeVisibilityCommandIdleTimeoutError(timeoutMilliseconds),
+          ), timeoutMilliseconds);
         }),
       ]);
     } finally {

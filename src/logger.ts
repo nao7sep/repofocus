@@ -6,14 +6,23 @@ export interface LogSink {
 
 const deniedKeys = new Set(['apikey', 'authorization', 'password', 'secret', 'token']);
 
-function redact(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(item => redact(item));
+function redact(value: unknown, ancestors = new WeakSet<object>()): unknown {
   if (value === null || typeof value !== 'object') return value;
+
+  if (ancestors.has(value)) return '[circular]';
+  ancestors.add(value);
+
+  if (Array.isArray(value)) {
+    const result = value.map(item => redact(item, ancestors));
+    ancestors.delete(value);
+    return result;
+  }
 
   const result: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value)) {
-    result[key] = deniedKeys.has(key.toLowerCase()) ? '[redacted]' : redact(child);
+    result[key] = deniedKeys.has(key.toLowerCase()) ? '[redacted]' : redact(child, ancestors);
   }
+  ancestors.delete(value);
   return result;
 }
 

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   NativeVisibilityCommandBusyError,
   NativeVisibilityCommandExecutor,
+  NativeVisibilityCommandIdleTimeoutError,
   NativeVisibilityCommandTimeoutError,
 } from '../src/nativeVisibilityCommandExecutor';
 
@@ -38,6 +39,41 @@ describe('NativeVisibilityCommandExecutor', () => {
 
     await executor.execute('toggle.alpha');
     expect(vi.getTimerCount()).toBe(0);
+    executor.dispose();
+    vi.useRealTimers();
+  });
+
+  it('waits for a timed-out command to settle without starting another command', async () => {
+    const gate = deferred();
+    const execute = vi.fn(() => gate.promise);
+    const executor = new NativeVisibilityCommandExecutor({ execute, timeoutMilliseconds: 5 });
+
+    await expect(executor.execute('toggle.alpha'))
+      .rejects.toBeInstanceOf(NativeVisibilityCommandTimeoutError);
+    const idle = executor.waitForIdle(50);
+    gate.resolve();
+
+    await expect(idle).resolves.toBeUndefined();
+    expect(execute).toHaveBeenCalledOnce();
+    executor.dispose();
+  });
+
+  it('bounds the wait for a native command that never settles', async () => {
+    vi.useFakeTimers();
+    const execute = vi.fn(() => new Promise<void>(() => {}));
+    const executor = new NativeVisibilityCommandExecutor({ execute, timeoutMilliseconds: 5 });
+
+    const command = executor.execute('toggle.alpha');
+    const commandResult = expect(command).rejects
+      .toBeInstanceOf(NativeVisibilityCommandTimeoutError);
+    await vi.advanceTimersByTimeAsync(5);
+    await commandResult;
+    const idle = executor.waitForIdle(10);
+    const idleResult = expect(idle).rejects
+      .toBeInstanceOf(NativeVisibilityCommandIdleTimeoutError);
+    await vi.advanceTimersByTimeAsync(10);
+    await idleResult;
+
     executor.dispose();
     vi.useRealTimers();
   });
