@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { GitRepository } from '../src/gitApi';
 import {
   probeVisibilityMappings,
   RepositoriesAlreadyHiddenError,
   VisibilityProbeInterruptedError,
+  VisibilityProbeLimitError,
   type VisibilityProbeLedger,
 } from '../src/visibilityBaseline';
 
@@ -195,5 +196,36 @@ describe('probeVisibilityMappings', () => {
       ledger,
       fastTimings,
     )).rejects.toThrow('Native repository focus did not settle.');
+  });
+
+  it('stops before an unsettled command set can issue unbounded toggles', async () => {
+    const world = nativeWorld(['alpha', 'beta', 'gamma']);
+    const { ledger, hidden } = ledgerOver(() => Promise.resolve());
+
+    await expect(probeVisibilityMappings(
+      world.repositories,
+      world.commands,
+      ledger,
+      { ...fastTimings, maximumToggleAttempts: 2 },
+    )).rejects.toBeInstanceOf(VisibilityProbeLimitError);
+
+    expect(hidden.size).toBeLessThanOrEqual(2);
+  });
+
+  it('stops an unsettled probe at its total time bound', async () => {
+    vi.useFakeTimers();
+    const world = nativeWorld(['alpha', 'beta']);
+    const { ledger } = ledgerOver(() => Promise.resolve());
+    const probe = probeVisibilityMappings(
+      world.repositories,
+      world.commands,
+      ledger,
+      { probeMilliseconds: 1_000, totalTimeoutMilliseconds: 20 },
+    );
+    const result = expect(probe).rejects.toBeInstanceOf(VisibilityProbeLimitError);
+
+    await vi.advanceTimersByTimeAsync(30);
+    await result;
+    vi.useRealTimers();
   });
 });

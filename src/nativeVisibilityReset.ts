@@ -12,6 +12,27 @@ export interface NativeVisibilityResetOptions {
   readonly timeoutMilliseconds?: number;
 }
 
+/** Coalesce automatic and user-requested reset attempts into one transition. */
+export class NativeVisibilityResetter {
+  private active: Promise<void> | undefined;
+
+  constructor(private readonly options: NativeVisibilityResetOptions) {}
+
+  get running(): boolean {
+    return this.active !== undefined;
+  }
+
+  reset(): Promise<void> {
+    if (this.active) return this.active;
+    const operation = resetNativeRepositoryVisibility(this.options);
+    const tracked = operation.finally(() => {
+      if (this.active === tracked) this.active = undefined;
+    });
+    this.active = tracked;
+    return tracked;
+  }
+}
+
 /**
  * Reveals every native SCM repository by passing through single selection and
  * back to multiple. VS Code exposes no public all-visible operation, while its
@@ -20,15 +41,24 @@ export interface NativeVisibilityResetOptions {
 export async function resetNativeRepositoryVisibility(
   options: NativeVisibilityResetOptions,
 ): Promise<void> {
-  await setSelectionMode(options, 'single');
-  await setSelectionMode(options, 'multiple');
+  const timeoutMilliseconds = options.timeoutMilliseconds ?? defaultTimeoutMilliseconds;
+  if (!Number.isSafeInteger(timeoutMilliseconds) || timeoutMilliseconds < 1) {
+    throw new Error('Native visibility reset timeout must be a positive safe integer.');
+  }
+  const deadline = Date.now() + timeoutMilliseconds;
+  await setSelectionMode(options, 'single', remainingTime(deadline));
+  await setSelectionMode(options, 'multiple', remainingTime(deadline));
+}
+
+function remainingTime(deadline: number): number {
+  return Math.max(1, deadline - Date.now());
 }
 
 async function setSelectionMode(
   options: NativeVisibilityResetOptions,
   mode: RepositorySelectionMode,
+  timeoutMilliseconds: number,
 ): Promise<void> {
-  const timeoutMilliseconds = options.timeoutMilliseconds ?? defaultTimeoutMilliseconds;
   let subscription: DisposableLike | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
 

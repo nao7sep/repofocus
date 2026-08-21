@@ -114,7 +114,7 @@
           "description": "Treat repositories with incoming commits as actionable."
         },
         "repofocus.fetchIntervalMinutes": {
-          "type": "number",
+          "type": "integer",
           "default": 5,
           "minimum": 0,
           "maximum": 1440,
@@ -125,8 +125,10 @@
           "type": "array",
           "default": [],
           "scope": "window",
+          "maxItems": 100,
           "items": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 512
           },
           "description": "Git repository glob patterns that remain visible even when clean. A pattern matches a repository's path (workspace-relative where it has one) or its directory name, so a bare name such as 'my-repo' works in any workspace shape."
         },

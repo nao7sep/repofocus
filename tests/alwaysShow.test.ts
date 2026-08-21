@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { matchesAlwaysShow } from '../src/alwaysShow';
+import { createAlwaysShowMatcher, matchesAlwaysShow } from '../src/alwaysShow';
 
 describe('matchesAlwaysShow', () => {
   it.each([
@@ -48,5 +48,21 @@ describe('matchesAlwaysShow', () => {
 
   it('returns false for an empty pattern list', () => {
     expect(matchesAlwaysShow('company', [])).toBe(false);
+  });
+
+  it('reuses one compiled matcher across repository state events', () => {
+    const matches = createAlwaysShowMatcher(['clients/**', 'repofocus']);
+
+    expect(matches('clients/api')).toBe(true);
+    expect(matches('/work/repofocus')).toBe(true);
+    expect(matches('company')).toBe(false);
+  });
+
+  it('fails visible when synced configuration exceeds the pattern bounds', () => {
+    const tooMany = Array.from({ length: 101 }, (_, index) => `repo-${index}`);
+    const tooLong = ['x'.repeat(513)];
+
+    expect(createAlwaysShowMatcher(tooMany)('unrelated')).toBe(true);
+    expect(createAlwaysShowMatcher(tooLong)('unrelated')).toBe(true);
   });
 });

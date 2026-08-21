@@ -4,20 +4,26 @@ import {
   type ActionabilityPolicy,
   type RepositoryActionability,
 } from './actionability';
-import { matchesAlwaysShow } from './alwaysShow';
+import { createAlwaysShowMatcher } from './alwaysShow';
 import { createDiagnostics } from './diagnostics';
 import type { GitApi, GitExtension, GitRepository } from './gitApi';
 import { GitRepositoryMonitor } from './gitRepositoryMonitor';
 import { Logger } from './logger';
-import { resetNativeRepositoryVisibility } from './nativeVisibilityReset';
-import { RemoteFetchScheduler, type RemoteFetchTarget } from './remoteFetchScheduler';
+import { NativeVisibilityCommandExecutor } from './nativeVisibilityCommandExecutor';
+import { NativeVisibilityResetter } from './nativeVisibilityReset';
+import {
+  normalizeFetchIntervalMilliseconds,
+  RemoteFetchScheduler,
+  selectRemoteFetchInterval,
+  type RemoteFetchTarget,
+} from './remoteFetchScheduler';
 import { toActionabilityInput } from './repositoryStateAdapter';
 import { VisibilityMappingCoordinator } from './visibilityMappingCoordinator';
 import { VisibilityReconciler } from './visibilityReconciler';
 
 const gitExtensionId = 'vscode.git';
 const filteringStateKey = 'repofocus.filteringEnabledByWorkspace';
-const visibilityAuditIntervalMilliseconds = 60_000;
+const visibilityAuditIntervalMilliseconds = 5 * 60_000;
 
 export interface RepoFocusExtensionApi {
   readonly git: GitApi;
@@ -49,6 +55,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
   const git = await activateGit();
   const output = vscode.window.createOutputChannel('RepoFocus');
   const logger = new Logger(output, context.extensionMode === vscode.ExtensionMode.Development);
+  const nativeVisibilityCommands = new NativeVisibilityCommandExecutor({
+    execute: async command => {
+      await vscode.commands.executeCommand(command);
+    },
+  });
   const manifest = context.extension.packageJSON as { version?: unknown };
   const extensionVersion = typeof manifest.version === 'string' ? manifest.version : 'unknown';
   context.subscriptions.push(output);
@@ -57,12 +68,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
   let remoteFailure: (key: string) => string | undefined = () => undefined;
   let policy = readPolicy();
   let alwaysShowPatterns = readAlwaysShowPatterns();
+  let alwaysShowMatcher = createAlwaysShowMatcher(alwaysShowPatterns);
   let compatibilityFailureReported = false;
 
   const reconciler = new VisibilityReconciler({
-    toggle: async command => {
-      await vscode.commands.executeCommand(command);
-    },
+    toggle: command => nativeVisibilityCommands.execute(command),
     onError: (error, failure) => {
       logger.error('Native visibility compatibility failed.', error, {
         strandedCommandCount: failure.strandedCommandCount,
@@ -105,23 +115,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
   const readSelectionMode = (): string =>
     vscode.workspace.getConfiguration('scm')
       .get<string>('repositories.selectionMode', 'multiple');
-  let resettingNativeVisibility = false;
-  const resetAllNativeVisibility = async (): Promise<void> => {
-    resettingNativeVisibility = true;
-    try {
-      await resetNativeRepositoryVisibility({
-        executeCommand: async command => {
-          await vscode.commands.executeCommand(command);
-        },
-        getSelectionMode: readSelectionMode,
-        onDidChangeSelectionMode: listener => vscode.workspace.onDidChangeConfiguration(event => {
-          if (event.affectsConfiguration('scm.repositories.selectionMode')) listener();
-        }),
-      });
-    } finally {
-      resettingNativeVisibility = false;
-    }
-  };
+  const nativeVisibilityResetter = new NativeVisibilityResetter({
+    executeCommand: command => nativeVisibilityCommands.execute(command),
+    getSelectionMode: readSelectionMode,
+    onDidChangeSelectionMode: listener => vscode.workspace.onDidChangeConfiguration(event => {
+      if (event.affectsConfiguration('scm.repositories.selectionMode')) listener();
+    }),
+  });
+  const resetAllNativeVisibility = (): Promise<void> => nativeVisibilityResetter.reset();
   const recoverHiddenBaseline = async (): Promise<void> => {
     logger.warn('Resetting native repository visibility after detecting a hidden native state.');
     await resetAllNativeVisibility();
@@ -129,6 +130,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
   };
 
   let monitor: GitRepositoryMonitor;
+  let syncFetchSchedule: (refreshWhenActive?: boolean) => void = () => {};
+  let refreshRemoteOnNextMapping = true;
 
   const visibility = new VisibilityMappingCoordinator({
     filteringRequested: () => filteringEnabled,
@@ -140,6 +143,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
     multipleSelectionMode: () => readSelectionMode() !== 'single',
     reconciler,
     onUnavailable: reason => {
+      syncFetchSchedule();
       logger.info('Visibility filtering is not active.', { reason });
       if (reason === 'repositories-already-hidden') {
         void vscode.window.showWarningMessage(
@@ -170,6 +174,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
       }
     },
     onInitialized: event => {
+      syncFetchSchedule(refreshRemoteOnNextMapping);
       logger.info('Visibility filtering initialized.', {
         repositoryCount: event.repositoryCount,
         actionableRepositoryCount: [...actionability.values()]
@@ -195,10 +200,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
         // the argument is inert — measured in a live Extension Host, `true`, `false`
         // and the default all return the absolute path, because there is no relative
         // form to produce. That shape is matched by name instead; see alwaysShow.
-        alwaysShow: matchesAlwaysShow(
-          vscode.workspace.asRelativePath(repository.rootUri.fsPath),
-          alwaysShowPatterns,
-        ),
+        alwaysShow: alwaysShowMatcher(vscode.workspace.asRelativePath(repository.rootUri.fsPath)),
         evaluationError: remoteFailure(repository.rootUri.toString()),
       }, policy);
     } catch (error) {
@@ -219,6 +221,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
         repositoryCount: monitor.repositories.length,
       });
       visibility.requestRefresh();
+      syncFetchSchedule();
     },
     onRepositoryReplaced: () => {
       if (!monitorReady) return;
@@ -230,6 +233,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
       // though the stable repository set is unchanged. Coalesce a fresh mapping
       // instead of retaining a command that may now name nothing.
       visibility.requestRefresh();
+      syncFetchSchedule();
     },
     onRepositoryChanged: evaluateRepository,
     onRepositoryClosed: repository => {
@@ -241,6 +245,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
         repositoryCount: monitor.repositories.length,
       });
       visibility.requestRefresh();
+      syncFetchSchedule();
     },
   });
   monitorReady = true;
@@ -250,10 +255,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
       state,
       repositoryCount: monitor.repositories.length,
     });
-    if (state === 'initialized') {
-      visibility.requestRefresh();
-      void fetchScheduler?.refreshNow();
-    }
+    if (state === 'initialized') visibility.requestRefresh();
+    syncFetchSchedule();
   }));
   visibility.requestRefresh();
 
@@ -267,11 +270,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
   interface RepositoryFetchTarget extends RemoteFetchTarget {
     readonly repository: GitRepository;
   }
+  let fetchIntervalMilliseconds = readFetchIntervalMilliseconds();
+  const currentRemoteFetchInterval = (): number => selectRemoteFetchInterval({
+    configuredIntervalMilliseconds: fetchIntervalMilliseconds,
+    filteringRequested: filteringEnabled,
+    filteringActive: reconciler.enabled,
+    baselineEstablished: visibility.baselineEstablished,
+    gitInitialized: git.state === 'initialized',
+    windowFocused: vscode.window.state.focused,
+    repositoryCount: monitor.repositories.length,
+    minimumRepositoryCount: readMinimumRepositoryCount(),
+    remoteDetectionEnabled: policy.includeIncomingCommits || policy.includeOutgoingCommits,
+  });
   fetchScheduler = new RemoteFetchScheduler({
     concurrency: 2,
     getTargets: () => {
-      if (git.state !== 'initialized') return [];
-      if (!policy.includeIncomingCommits && !policy.includeOutgoingCommits) return [];
+      if (currentRemoteFetchInterval() === 0) return [];
       return monitor.repositories
         .filter(repository => repository.state.remotes.length > 0)
         .map((repository): RepositoryFetchTarget => ({
@@ -302,13 +316,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
   });
   context.subscriptions.push(fetchScheduler);
   remoteFailure = key => fetchScheduler.hasFailed(key) ? 'Remote refresh failed.' : undefined;
-  let fetchIntervalMilliseconds = readFetchIntervalMilliseconds();
-  fetchScheduler.setInterval(fetchIntervalMilliseconds);
-  if (fetchIntervalMilliseconds > 0) void fetchScheduler.refreshNow();
+  let scheduledFetchIntervalMilliseconds = 0;
+  syncFetchSchedule = (refreshWhenActive = false): void => {
+    const nextInterval = currentRemoteFetchInterval();
+    fetchScheduler.setInterval(nextInterval);
+    scheduledFetchIntervalMilliseconds = nextInterval;
+    if (nextInterval > 0 && refreshWhenActive) {
+      refreshRemoteOnNextMapping = false;
+      void fetchScheduler.refreshNow();
+    } else if (refreshWhenActive && filteringEnabled && fetchIntervalMilliseconds > 0) {
+      refreshRemoteOnNextMapping = true;
+    }
+  };
+  syncFetchSchedule(true);
   const visibilityAuditTimer = setInterval(() => {
-    void visibility.audit();
+    if (vscode.window.state.focused) void visibility.audit();
   }, visibilityAuditIntervalMilliseconds);
   context.subscriptions.push({ dispose: () => clearInterval(visibilityAuditTimer) });
+  context.subscriptions.push(vscode.window.onDidChangeWindowState(state => {
+    syncFetchSchedule();
+    if (state.focused) void visibility.audit();
+  }));
 
   const copyDiagnostics = async (): Promise<void> => {
     const diagnostics = createDiagnostics({
@@ -324,6 +352,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
       repositoryStates: [...actionability.values()],
       hiddenByRepoFocusCount: reconciler.hiddenRepositoryCount,
       remoteFailureCount: fetchScheduler.failureCount,
+      remotePendingFetchCount: fetchScheduler.pendingFetchCount,
       policy,
       alwaysShowPatternCount: alwaysShowPatterns.length,
       fetchIntervalMinutes: fetchIntervalMilliseconds / 60_000,
@@ -341,9 +370,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
 
   const setFilteringEnabled = async (enabled: boolean): Promise<void> => {
     filteringEnabled = enabled;
+    if (!enabled) syncFetchSchedule();
     await context.workspaceState.update(filteringStateKey, enabled);
     await vscode.commands.executeCommand('setContext', 'repofocus.filteringEnabled', enabled);
     await visibility.updateFiltering();
+    if (enabled) syncFetchSchedule(true);
     logger.info('Filtering state changed.', { enabled });
   };
 
@@ -360,6 +391,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
       logger.info('Manual refresh requested.');
       policy = readPolicy();
       alwaysShowPatterns = readAlwaysShowPatterns();
+      alwaysShowMatcher = createAlwaysShowMatcher(alwaysShowPatterns);
       await fetchScheduler.refreshNow();
       evaluateAll();
       visibility.retryIfUnavailable();
@@ -392,19 +424,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
       // A selection-mode change can make filtering possible again.
       if (
         event.affectsConfiguration('scm.repositories.selectionMode')
-        && !resettingNativeVisibility
+        && !nativeVisibilityResetter.running
       ) {
         visibility.requestRefresh();
       }
       if (!event.affectsConfiguration('repofocus')) return;
+      const previousRemotePolicy = policy.includeIncomingCommits || policy.includeOutgoingCommits;
+      const previousFetchInterval = fetchIntervalMilliseconds;
       policy = readPolicy();
       alwaysShowPatterns = readAlwaysShowPatterns();
+      alwaysShowMatcher = createAlwaysShowMatcher(alwaysShowPatterns);
       const nextFetchInterval = readFetchIntervalMilliseconds();
-      fetchScheduler.setInterval(nextFetchInterval);
-      if (nextFetchInterval > 0 && nextFetchInterval !== fetchIntervalMilliseconds) {
-        void fetchScheduler.refreshNow();
-      }
       fetchIntervalMilliseconds = nextFetchInterval;
+      const nextRemotePolicy = policy.includeIncomingCommits || policy.includeOutgoingCommits;
+      syncFetchSchedule(
+        nextFetchInterval !== previousFetchInterval || nextRemotePolicy !== previousRemotePolicy,
+      );
       evaluateAll();
       if (event.affectsConfiguration('repofocus.minimumRepositoryCount')) {
         void visibility.updateFiltering();
@@ -438,6 +473,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
       fetchScheduler.dispose();
       await visibility.waitForIdle();
       await reconciler.shutdown();
+      nativeVisibilityCommands.dispose();
       actionability.clear();
       logger.info('RepoFocus stopped.', { clean: true });
     })();
@@ -490,7 +526,7 @@ function readPolicy(): ActionabilityPolicy {
 
 function readFetchIntervalMilliseconds(): number {
   const minutes = vscode.workspace.getConfiguration('repofocus').get('fetchIntervalMinutes', 5);
-  return Number.isFinite(minutes) && minutes > 0 ? Math.round(minutes * 60_000) : 0;
+  return normalizeFetchIntervalMilliseconds(minutes);
 }
 
 function readAlwaysShowPatterns(): readonly string[] {

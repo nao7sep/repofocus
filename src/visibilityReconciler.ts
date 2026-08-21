@@ -80,6 +80,14 @@ export class VisibilityReconciler {
   }
 
   setFilteringEnabled(enabled: boolean): Promise<void> {
+    if (this.filteringEnabled === enabled) {
+      // A failed reconciler retains commands whose restoration failed. The
+      // user's repeated disable/show-all request is the explicit retry path.
+      if (this.state !== 'active' && !enabled) {
+        this.queue = this.queue.then(() => this.restoreOwnedCommands());
+      }
+      return this.queue;
+    }
     this.filteringEnabled = enabled;
     if (this.state === 'active') {
       this.requestReconcile();
@@ -90,14 +98,14 @@ export class VisibilityReconciler {
   }
 
   pause(): Promise<void> {
-    if (this.state !== 'active') return this.queue;
+    if (this.state !== 'active' || this.paused) return this.queue;
     this.paused = true;
     this.requested = false;
     return this.queue;
   }
 
   resume(): Promise<void> {
-    if (this.state !== 'active') return this.queue;
+    if (this.state !== 'active' || !this.paused) return this.queue;
     this.paused = false;
     this.requestReconcile();
     return this.queue;
@@ -105,7 +113,14 @@ export class VisibilityReconciler {
 
   setActionability(repository: RepositoryIdentity, value: RepositoryActionability): void {
     if (this.state !== 'active') return;
-    this.actionability.set(repositoryKey(repository), value);
+    const key = repositoryKey(repository);
+    const previous = this.actionability.get(key);
+    this.actionability.set(key, value);
+    // Visibility is the reconciler's only decision. Git emits state events for
+    // many changes that alter counts or metadata without changing whether the
+    // repository should be shown; those must not start another O(repositories)
+    // pass through the mapping.
+    if (previous?.actionable === value.actionable) return;
     this.requestReconcile();
   }
 

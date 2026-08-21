@@ -16,6 +16,13 @@ export class VisibilityProbeInterruptedError extends Error {
   }
 }
 
+export class VisibilityProbeLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'VisibilityProbeLimitError';
+  }
+}
+
 /**
  * Repositories were hidden in the native Repositories view before RepoFocus
  * mapped, so they cannot be identified: focus transfer is the only signal VS
@@ -42,9 +49,13 @@ export interface VisibilityProbeTimings {
   readonly probeMilliseconds?: number;
   readonly selectionTimeoutMilliseconds?: number;
   readonly isCurrent?: () => boolean;
+  readonly totalTimeoutMilliseconds?: number;
+  readonly maximumToggleAttempts?: number;
 }
 
 export const DEFAULT_PROBE_MILLISECONDS = 100;
+export const DEFAULT_TOTAL_PROBE_TIMEOUT_MILLISECONDS = 60_000;
+export const DEFAULT_MAXIMUM_TOGGLE_ATTEMPTS = 500;
 
 function selectedRepository(repositories: readonly GitRepository[]): GitRepository | undefined {
   const selected = repositories.filter(repository => repository.ui.selected);
@@ -100,8 +111,35 @@ export async function probeVisibilityMappings(
 ): Promise<readonly VisibilityMapping[]> {
   const probeMilliseconds = timings.probeMilliseconds ?? DEFAULT_PROBE_MILLISECONDS;
   const selectionTimeoutMilliseconds = timings.selectionTimeoutMilliseconds ?? 1_000;
+  const totalTimeoutMilliseconds = timings.totalTimeoutMilliseconds
+    ?? DEFAULT_TOTAL_PROBE_TIMEOUT_MILLISECONDS;
+  const maximumToggleAttempts = timings.maximumToggleAttempts
+    ?? DEFAULT_MAXIMUM_TOGGLE_ATTEMPTS;
+  if (!Number.isSafeInteger(totalTimeoutMilliseconds) || totalTimeoutMilliseconds < 1) {
+    throw new Error('Visibility probe timeout must be a positive safe integer.');
+  }
+  if (!Number.isSafeInteger(maximumToggleAttempts) || maximumToggleAttempts < 1) {
+    throw new Error('Visibility probe toggle limit must be a positive safe integer.');
+  }
+  const deadline = Date.now() + totalTimeoutMilliseconds;
+  let toggleAttempts = 0;
   const assertCurrent = (): void => {
     if (timings.isCurrent?.() === false) throw new VisibilityProbeInterruptedError();
+    if (Date.now() >= deadline) {
+      throw new VisibilityProbeLimitError(
+        `Native visibility mapping did not finish within ${totalTimeoutMilliseconds} milliseconds.`,
+      );
+    }
+  };
+  const toggle = async (kind: 'hide' | 'reveal', command: string): Promise<void> => {
+    assertCurrent();
+    if (toggleAttempts >= maximumToggleAttempts) {
+      throw new VisibilityProbeLimitError(
+        `Native visibility mapping exceeded ${maximumToggleAttempts} toggle attempts.`,
+      );
+    }
+    toggleAttempts += 1;
+    await ledger[kind](command);
   };
   const remainingCommands = [...candidateCommands];
   const mappings: VisibilityMapping[] = [];
@@ -117,7 +155,7 @@ export async function probeVisibilityMappings(
     for (let index = 0; index < remainingCommands.length; index += 1) {
       const command = remainingCommands[index];
       assertCurrent();
-      await ledger.hide(command);
+      await toggle('hide', command);
       assertCurrent();
       // executeCommand resolves before the extension-host Git wrapper always
       // observes the resulting focus change. Windows exposes this gap under
@@ -134,7 +172,7 @@ export async function probeVisibilityMappings(
         break;
       }
       assertCurrent();
-      await ledger.reveal(command);
+      await toggle('reveal', command);
       assertCurrent();
     }
     // No command moved focus: the focused repository is the only visible one.

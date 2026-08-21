@@ -7,6 +7,12 @@ import { VisibilityReconciler } from '../src/visibilityReconciler';
 
 const clean: RepositoryActionability = { actionable: false, reasons: [] };
 
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(done => { resolve = done; });
+  return { promise, resolve };
+}
+
 interface NativeRepositoryFixture {
   readonly commands: readonly string[];
   /** What `getCommands` returns: the per-repository family plus its siblings. */
@@ -68,6 +74,7 @@ function coordinatorFixture(
   readonly coordinator: VisibilityMappingCoordinator;
   readonly execute: ReturnType<typeof vi.fn>;
   readonly getCommands: ReturnType<typeof vi.fn>;
+  readonly discoveryCommands: readonly string[];
   readonly reconciler: VisibilityReconciler;
 } {
   const native = nativeRepositories(names);
@@ -89,7 +96,7 @@ function coordinatorFixture(
     commandRetryMilliseconds: 0,
     topologySettleMilliseconds: 0,
   });
-  return { coordinator, execute, getCommands, reconciler };
+  return { coordinator, discoveryCommands: native.discoveryCommands, execute, getCommands, reconciler };
 }
 
 describe('VisibilityMappingCoordinator', () => {
@@ -526,6 +533,58 @@ describe('VisibilityMappingCoordinator', () => {
     expect(fixture.getCommands).toHaveBeenCalledTimes(commandReadsAfterMapping + 1);
     expect(fixture.execute).toHaveBeenCalledTimes(togglesAfterMapping);
     expect(fixture.coordinator.baselineEstablished).toBe(true);
+  });
+
+  it('coalesces concurrent periodic audits into one command-registry read', async () => {
+    const fixture = coordinatorFixture(['alpha', 'beta']);
+    fixture.coordinator.requestRefresh();
+    await fixture.coordinator.waitForIdle();
+    const readsAfterMapping = fixture.getCommands.mock.calls.length;
+    const gate = deferred<readonly string[]>();
+    fixture.getCommands.mockImplementationOnce(() => gate.promise);
+
+    const first = fixture.coordinator.audit();
+    const second = fixture.coordinator.audit();
+    expect(fixture.getCommands).toHaveBeenCalledTimes(readsAfterMapping + 1);
+    gate.resolve(fixture.discoveryCommands);
+    await Promise.all([first, second]);
+
+    expect(fixture.getCommands).toHaveBeenCalledTimes(readsAfterMapping + 1);
+  });
+
+  it('does not periodically re-probe or reset an unavailable hidden baseline', async () => {
+    const native = nativeRepositories(['alpha', 'beta']);
+    const recoverHiddenBaseline = vi.fn(async () => {});
+    const execute = vi.fn(() => Promise.resolve());
+    const getCommands = vi.fn(() => Promise.resolve(native.discoveryCommands));
+    const reconciler = new VisibilityReconciler({ toggle: execute });
+    const coordinator = new VisibilityMappingCoordinator({
+      filteringRequested: () => true,
+      getCommands,
+      getRepositories: () => native.repositories,
+      recoverHiddenBaseline,
+      multipleSelectionMode: () => true,
+      minimumRepositoryCount: () => 2,
+      reconciler,
+      probeTimings: { probeMilliseconds: 1, selectionTimeoutMilliseconds: 1 },
+      topologySettleMilliseconds: 0,
+    });
+
+    coordinator.requestRefresh();
+    await coordinator.waitForIdle();
+    expect(coordinator.mappingState).toBe('repositories-already-hidden');
+    expect(recoverHiddenBaseline).toHaveBeenCalledOnce();
+    const commandReads = getCommands.mock.calls.length;
+    const toggles = execute.mock.calls.length;
+
+    await Promise.all([coordinator.audit(), coordinator.audit()]);
+    expect(getCommands).toHaveBeenCalledTimes(commandReads);
+    expect(execute).toHaveBeenCalledTimes(toggles);
+
+    coordinator.requestRefresh();
+    await coordinator.waitForIdle();
+    expect(recoverHiddenBaseline).toHaveBeenCalledOnce();
+    coordinator.dispose();
   });
 
   it('aborts an in-flight mapping transaction before processing a newer topology', async () => {

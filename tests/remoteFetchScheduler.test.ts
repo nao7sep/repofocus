@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import { RemoteFetchScheduler, type RemoteFetchTarget } from '../src/remoteFetchScheduler';
+import {
+  MAX_FETCH_INTERVAL_MILLISECONDS,
+  MIN_FETCH_INTERVAL_MILLISECONDS,
+  normalizeFetchIntervalMilliseconds,
+  RemoteFetchScheduler,
+  selectRemoteFetchInterval,
+  type RemoteFetchTarget,
+} from '../src/remoteFetchScheduler';
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
@@ -235,6 +242,7 @@ describe('RemoteFetchScheduler', () => {
       successCount: 1,
       failureCount: 1,
       staleCount: 0,
+      busyCount: 0,
       durationMilliseconds: expect.any(Number),
     });
     scheduler.dispose();
@@ -251,6 +259,66 @@ describe('RemoteFetchScheduler', () => {
     await scheduler.refreshNow();
     expect(fetch).not.toHaveBeenCalled();
     vi.useRealTimers();
+  });
+
+  it('does not postpone an existing timer when the interval is unchanged', async () => {
+    vi.useFakeTimers();
+    const fetch = vi.fn(() => Promise.resolve());
+    const scheduler = new RemoteFetchScheduler({ getTargets: () => [{ key: 'repo', fetch }] });
+    scheduler.setInterval(1_000);
+
+    await vi.advanceTimersByTimeAsync(500);
+    scheduler.setInterval(1_000);
+    await vi.advanceTimersByTimeAsync(500);
+    await scheduler.waitForIdle();
+
+    expect(fetch).toHaveBeenCalledOnce();
+    scheduler.dispose();
+    vi.useRealTimers();
+  });
+});
+
+describe('normalizeFetchIntervalMilliseconds', () => {
+  it.each([
+    [0, 0],
+    [-1, 0],
+    [Number.NaN, 0],
+    [0.001, MIN_FETCH_INTERVAL_MILLISECONDS],
+    [1, MIN_FETCH_INTERVAL_MILLISECONDS],
+    [5, 5 * 60_000],
+    [10_000, MAX_FETCH_INTERVAL_MILLISECONDS],
+  ])('normalizes %s minutes to %s milliseconds', (value, expected) => {
+    expect(normalizeFetchIntervalMilliseconds(value)).toBe(expected);
+  });
+});
+
+describe('selectRemoteFetchInterval', () => {
+  const ready = {
+    configuredIntervalMilliseconds: 300_000,
+    filteringRequested: true,
+    filteringActive: true,
+    baselineEstablished: true,
+    gitInitialized: true,
+    windowFocused: true,
+    repositoryCount: 3,
+    minimumRepositoryCount: 2,
+    remoteDetectionEnabled: true,
+  } as const;
+
+  it('returns the configured interval only when fetching contributes to active filtering', () => {
+    expect(selectRemoteFetchInterval(ready)).toBe(300_000);
+  });
+
+  it.each([
+    ['filtering is off', { filteringRequested: false }],
+    ['filtering is paused', { filteringActive: false }],
+    ['mapping is unavailable', { baselineEstablished: false }],
+    ['Git discovery is incomplete', { gitInitialized: false }],
+    ['the window is in the background', { windowFocused: false }],
+    ['the repository threshold is not met', { repositoryCount: 1 }],
+    ['remote detection is disabled', { remoteDetectionEnabled: false }],
+  ])('returns zero when %s', (_name, override) => {
+    expect(selectRemoteFetchInterval({ ...ready, ...override })).toBe(0);
   });
 });
 
@@ -317,6 +385,33 @@ describe('RemoteFetchScheduler bounds a hung fetch', () => {
     // rather than finishing this file.
     await scheduler.refreshNow();
     expect(scheduler.hasFailed('quick')).toBe(false);
+    scheduler.dispose();
+  });
+
+  it('does not start another fetch while a timed-out underlying fetch remains alive', async () => {
+    const gate = deferred();
+    const fetch = vi.fn(() => gate.promise);
+    const completed: unknown[] = [];
+    const scheduler = new RemoteFetchScheduler({
+      getTargets: () => [{ key: 'stuck', isLive: () => true, fetch }],
+      fetchTimeoutMilliseconds: 10,
+      onRunComplete: result => completed.push(result),
+    });
+
+    await scheduler.refreshNow();
+    expect(scheduler.pendingFetchCount).toBe(1);
+    await scheduler.refreshNow();
+
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(completed).toEqual([
+      expect.objectContaining({ failureCount: 1, busyCount: 0 }),
+      expect.objectContaining({ failureCount: 0, busyCount: 1 }),
+    ]);
+
+    gate.resolve();
+    await vi.waitFor(() => expect(scheduler.pendingFetchCount).toBe(0));
+    await scheduler.refreshNow();
+    expect(fetch).toHaveBeenCalledTimes(2);
     scheduler.dispose();
   });
 });

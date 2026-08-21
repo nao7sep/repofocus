@@ -20,6 +20,7 @@ describe('createDiagnostics', () => {
       ],
       hiddenByRepoFocusCount: 1,
       remoteFailureCount: 1,
+      remotePendingFetchCount: 1,
       policy: {
         includeIncomingCommits: true,
         includeOutgoingCommits: true,
@@ -37,6 +38,7 @@ describe('createDiagnostics', () => {
       actionableRepositoryCount: 2,
       hiddenByRepoFocusCount: 1,
       remoteFailureCount: 1,
+      remotePendingFetchCount: 1,
       reasonCounts: { unstaged: 1, error: 1 },
     });
     expect(diagnostics).not.toContain('/private/repo');

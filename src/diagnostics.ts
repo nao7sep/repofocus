@@ -14,6 +14,7 @@ export interface RepoFocusDiagnosticsInput {
   readonly repositoryStates: readonly RepositoryActionability[];
   readonly hiddenByRepoFocusCount: number;
   readonly remoteFailureCount: number;
+  readonly remotePendingFetchCount: number;
   readonly policy: ActionabilityPolicy;
   readonly alwaysShowPatternCount: number;
   readonly fetchIntervalMinutes: number;
@@ -43,6 +44,7 @@ export function createDiagnostics(input: RepoFocusDiagnosticsInput): string {
     actionableRepositoryCount: input.repositoryStates.filter(state => state.actionable).length,
     hiddenByRepoFocusCount: input.hiddenByRepoFocusCount,
     remoteFailureCount: input.remoteFailureCount,
+    remotePendingFetchCount: input.remotePendingFetchCount,
     reasonCounts,
     settings: {
       ...input.policy,

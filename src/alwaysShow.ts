@@ -1,4 +1,7 @@
-import { minimatch } from 'minimatch';
+import { Minimatch } from 'minimatch';
+
+export const MAX_ALWAYS_SHOW_PATTERNS = 100;
+export const MAX_ALWAYS_SHOW_PATTERN_LENGTH = 512;
 
 function normalize(value: string): string {
   return value.replaceAll('\\', '/').replace(/^\.\//, '').replace(/\/$/, '');
@@ -33,10 +36,30 @@ export function matchesAlwaysShow(
   reportedPath: string,
   patterns: readonly string[],
 ): boolean {
-  const options = { dot: true, nocase: process.platform === 'win32' } as const;
-  const paths = candidates(reportedPath);
-  return patterns.some(pattern => {
-    const normalizedPattern = normalize(pattern);
-    return paths.some(path => minimatch(path, normalizedPattern, options));
-  });
+  return createAlwaysShowMatcher(patterns)(reportedPath);
+}
+
+/** Compile configuration once; repository state events only perform matches. */
+export function createAlwaysShowMatcher(
+  patterns: readonly string[],
+): (reportedPath: string) => boolean {
+  if (
+    patterns.length > MAX_ALWAYS_SHOW_PATTERNS
+    || patterns.some(pattern => (
+      typeof pattern !== 'string' || pattern.length > MAX_ALWAYS_SHOW_PATTERN_LENGTH
+    ))
+  ) {
+    // Settings normally reject this shape. If a hand-edited or synced value
+    // bypasses validation, fail visible instead of compiling unbounded input or
+    // hiding repositories whose exemption could not be evaluated.
+    return () => true;
+  }
+  // Brace expansion is not part of the documented pattern surface and can
+  // multiply one setting into a very large generated pattern set.
+  const options = { dot: true, nobrace: true, nocase: process.platform === 'win32' } as const;
+  const matchers = patterns.map(pattern => new Minimatch(normalize(pattern), options));
+  return reportedPath => {
+    const paths = candidates(reportedPath);
+    return matchers.some(matcher => paths.some(path => matcher.match(path)));
+  };
 }

@@ -60,7 +60,8 @@ export class VisibilityMappingCoordinator {
   private reportedReason: VisibilityUnavailableReason | undefined;
   private mappedRepositoryKeys = new Set<string>();
   private mappedCommands = new Set<string>();
-  private hiddenRecoveryAttempted = false;
+  private hiddenRecoveryUsed = false;
+  private auditRun: Promise<void> | undefined;
 
   constructor(private readonly options: VisibilityMappingCoordinatorOptions) {}
 
@@ -76,7 +77,6 @@ export class VisibilityMappingCoordinator {
   }
 
   requestRefresh(): void {
-    this.hiddenRecoveryAttempted = false;
     this.queueRefresh(true, true);
   }
 
@@ -96,6 +96,16 @@ export class VisibilityMappingCoordinator {
    * low-frequency timer. It never probes or toggles a healthy mapping.
    */
   async audit(): Promise<void> {
+    if (this.auditRun) return this.auditRun;
+    const operation = this.auditOnce();
+    const tracked = operation.finally(() => {
+      if (this.auditRun === tracked) this.auditRun = undefined;
+    });
+    this.auditRun = tracked;
+    return tracked;
+  }
+
+  private async auditOnce(): Promise<void> {
     if (this.disposed || !this.options.reconciler.compatible || this.run) return;
     const repositories = [...this.options.getRepositories()];
     const shouldFilter = this.options.filteringRequested()
@@ -104,10 +114,11 @@ export class VisibilityMappingCoordinator {
       await this.updateFiltering();
       return;
     }
-    if (this.options.topologyReady?.() === false || !this.hasBaseline) {
-      this.requestRefresh();
-      return;
-    }
+    // Startup, Git-state, configuration, topology, native-command polling and
+    // explicit retry paths already own unavailable states. Retrying them from a
+    // timer would turn a paused hidden/unsupported state into endless probes or
+    // selection-mode resets.
+    if (this.options.topologyReady?.() === false || !this.hasBaseline) return;
 
     try {
       const discovery = discoverVisibilityCommands(
@@ -292,8 +303,8 @@ export class VisibilityMappingCoordinator {
       await this.options.reconciler.restoreOwned();
       if (revision !== this.revision || this.disposed) return;
       if (error instanceof RepositoriesAlreadyHiddenError) {
-        if (this.options.recoverHiddenBaseline && !this.hiddenRecoveryAttempted) {
-          this.hiddenRecoveryAttempted = true;
+        if (this.options.recoverHiddenBaseline && !this.hiddenRecoveryUsed) {
+          this.hiddenRecoveryUsed = true;
           try {
             await this.options.recoverHiddenBaseline();
           } catch (recoveryError) {

@@ -31,6 +31,42 @@ export interface RemoteFetchTarget {
  * legitimately slow; this exists to end a wedge, not to police slowness.
  */
 export const FETCH_TIMEOUT_MILLISECONDS = 120_000;
+export const MIN_FETCH_INTERVAL_MILLISECONDS = 60_000;
+export const MAX_FETCH_INTERVAL_MILLISECONDS = 24 * 60 * 60_000;
+
+/** Convert user-facing minutes into a timer interval that cannot become hot. */
+export function normalizeFetchIntervalMilliseconds(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return 0;
+  return Math.min(
+    MAX_FETCH_INTERVAL_MILLISECONDS,
+    Math.max(MIN_FETCH_INTERVAL_MILLISECONDS, Math.round(value * 60_000)),
+  );
+}
+
+export interface RemoteFetchScheduleInput {
+  readonly configuredIntervalMilliseconds: number;
+  readonly filteringRequested: boolean;
+  readonly filteringActive: boolean;
+  readonly baselineEstablished: boolean;
+  readonly gitInitialized: boolean;
+  readonly windowFocused: boolean;
+  readonly repositoryCount: number;
+  readonly minimumRepositoryCount: number;
+  readonly remoteDetectionEnabled: boolean;
+}
+
+/** Return zero unless periodic fetching can contribute to active filtering. */
+export function selectRemoteFetchInterval(input: RemoteFetchScheduleInput): number {
+  return input.filteringRequested
+    && input.filteringActive
+    && input.baselineEstablished
+    && input.gitInitialized
+    && input.windowFocused
+    && input.repositoryCount >= input.minimumRepositoryCount
+    && input.remoteDetectionEnabled
+    ? input.configuredIntervalMilliseconds
+    : 0;
+}
 
 export class FetchTimeoutError extends Error {
   constructor(milliseconds: number) {
@@ -55,6 +91,8 @@ export interface RemoteFetchRunResult {
   readonly successCount: number;
   readonly failureCount: number;
   readonly staleCount: number;
+  /** Targets skipped because an earlier timed-out fetch is still alive. */
+  readonly busyCount: number;
   readonly durationMilliseconds: number;
 }
 
@@ -66,6 +104,12 @@ export class RemoteFetchScheduler implements DisposableLike {
   private disposed = false;
   private readonly concurrency: number;
   private readonly fetchTimeoutMilliseconds: number;
+  /**
+   * A timeout bounds RepoFocus's wait but cannot cancel VS Code's Git fetch.
+   * Retain the underlying promise so later intervals cannot pile another fetch
+   * onto the same repository while that operation is still alive.
+   */
+  private readonly underlyingFetches = new Map<string, Promise<void>>();
   /**
    * The last attempt's outcome, held against the target that produced it rather
    * than against its key alone. A key names a repository URI, and a repository
@@ -90,6 +134,10 @@ export class RemoteFetchScheduler implements DisposableLike {
     return this.failures.size;
   }
 
+  get pendingFetchCount(): number {
+    return this.underlyingFetches.size;
+  }
+
   constructor(private readonly options: RemoteFetchSchedulerOptions) {
     const concurrency = options.concurrency ?? 2;
     if (!Number.isSafeInteger(concurrency) || concurrency < 1) {
@@ -107,11 +155,26 @@ export class RemoteFetchScheduler implements DisposableLike {
    * Await a fetch, but never past the bound. The timer is cleared on both paths
    * so a completed fetch leaves nothing pending behind it.
    */
-  private async fetchBounded(target: RemoteFetchTarget): Promise<void> {
+  private async fetchBounded(target: RemoteFetchTarget): Promise<boolean> {
+    if (this.underlyingFetches.has(target.key)) return false;
+    const fetch = Promise.resolve().then(() => target.fetch());
+    this.underlyingFetches.set(target.key, fetch);
+    void fetch.then(
+      () => {
+        if (this.underlyingFetches.get(target.key) === fetch) {
+          this.underlyingFetches.delete(target.key);
+        }
+      },
+      () => {
+        if (this.underlyingFetches.get(target.key) === fetch) {
+          this.underlyingFetches.delete(target.key);
+        }
+      },
+    );
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
-        target.fetch(),
+        fetch,
         new Promise<never>((_resolve, reject) => {
           timer = setTimeout(
             () => reject(new FetchTimeoutError(this.fetchTimeoutMilliseconds)),
@@ -119,6 +182,7 @@ export class RemoteFetchScheduler implements DisposableLike {
           );
         }),
       ]);
+      return true;
     } finally {
       if (timer !== undefined) clearTimeout(timer);
     }
@@ -128,6 +192,7 @@ export class RemoteFetchScheduler implements DisposableLike {
     if (!Number.isSafeInteger(intervalMilliseconds) || intervalMilliseconds < 0) {
       throw new Error('Fetch interval must be a non-negative safe integer.');
     }
+    if (this.intervalMilliseconds === intervalMilliseconds) return;
     this.intervalMilliseconds = intervalMilliseconds;
     this.reschedule();
   }
@@ -165,6 +230,7 @@ export class RemoteFetchScheduler implements DisposableLike {
       let successCount = 0;
       let failureCount = 0;
       let staleCount = 0;
+      let busyCount = 0;
       this.options.onRunStart?.(targets.length);
       let next = 0;
       const worker = async (): Promise<void> => {
@@ -174,7 +240,10 @@ export class RemoteFetchScheduler implements DisposableLike {
           const target = targets[index];
           if (!target) return;
           try {
-            await this.fetchBounded(target);
+            if (!await this.fetchBounded(target)) {
+              busyCount += 1;
+              continue;
+            }
             // A dead target records nothing: its key may already name a
             // different repository, and attributing this result to that one
             // would be worse than having no result at all.
@@ -203,6 +272,7 @@ export class RemoteFetchScheduler implements DisposableLike {
           successCount,
           failureCount,
           staleCount,
+          busyCount,
           durationMilliseconds: Date.now() - startedAt,
         });
       }
