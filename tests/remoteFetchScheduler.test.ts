@@ -215,6 +215,31 @@ describe('RemoteFetchScheduler', () => {
     scheduler.dispose();
   });
 
+  it('reports one aggregate result for a refresh run', async () => {
+    const onRunStart = vi.fn();
+    const onRunComplete = vi.fn();
+    const scheduler = new RemoteFetchScheduler({
+      getTargets: () => [
+        { key: 'healthy', fetch: () => Promise.resolve() },
+        { key: 'failed', fetch: () => Promise.reject(new Error('offline')) },
+      ],
+      onRunStart,
+      onRunComplete,
+    });
+
+    await scheduler.refreshNow();
+
+    expect(onRunStart).toHaveBeenCalledWith(2);
+    expect(onRunComplete).toHaveBeenCalledWith({
+      targetCount: 2,
+      successCount: 1,
+      failureCount: 1,
+      staleCount: 0,
+      durationMilliseconds: expect.any(Number),
+    });
+    scheduler.dispose();
+  });
+
   it('stops scheduling work when disposed', async () => {
     vi.useFakeTimers();
     const fetch = vi.fn(() => Promise.resolve());

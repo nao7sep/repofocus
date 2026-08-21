@@ -9,14 +9,15 @@ import { createDiagnostics } from './diagnostics';
 import type { GitApi, GitExtension, GitRepository } from './gitApi';
 import { GitRepositoryMonitor } from './gitRepositoryMonitor';
 import { Logger } from './logger';
+import { resetNativeRepositoryVisibility } from './nativeVisibilityReset';
 import { RemoteFetchScheduler, type RemoteFetchTarget } from './remoteFetchScheduler';
 import { toActionabilityInput } from './repositoryStateAdapter';
-import { selectionModeCommands } from './visibilityCommandResolver';
 import { VisibilityMappingCoordinator } from './visibilityMappingCoordinator';
 import { VisibilityReconciler } from './visibilityReconciler';
 
 const gitExtensionId = 'vscode.git';
 const filteringStateKey = 'repofocus.filteringEnabledByWorkspace';
+const visibilityAuditIntervalMilliseconds = 60_000;
 
 export interface RepoFocusExtensionApi {
   readonly git: GitApi;
@@ -101,14 +102,42 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
   await vscode.commands.executeCommand('setContext', 'repofocus.filteringEnabled', filteringEnabled);
   await vscode.commands.executeCommand('setContext', 'repofocus.hasError', false);
 
+  const readSelectionMode = (): string =>
+    vscode.workspace.getConfiguration('scm')
+      .get<string>('repositories.selectionMode', 'multiple');
+  let resettingNativeVisibility = false;
+  const resetAllNativeVisibility = async (): Promise<void> => {
+    resettingNativeVisibility = true;
+    try {
+      await resetNativeRepositoryVisibility({
+        executeCommand: async command => {
+          await vscode.commands.executeCommand(command);
+        },
+        getSelectionMode: readSelectionMode,
+        onDidChangeSelectionMode: listener => vscode.workspace.onDidChangeConfiguration(event => {
+          if (event.affectsConfiguration('scm.repositories.selectionMode')) listener();
+        }),
+      });
+    } finally {
+      resettingNativeVisibility = false;
+    }
+  };
+  const recoverHiddenBaseline = async (): Promise<void> => {
+    logger.warn('Resetting native repository visibility after detecting a hidden startup state.');
+    await resetAllNativeVisibility();
+    logger.info('Native repository visibility reset completed.');
+  };
+
+  let monitor: GitRepositoryMonitor;
+
   const visibility = new VisibilityMappingCoordinator({
     filteringRequested: () => filteringEnabled,
     getCommands: async () => await vscode.commands.getCommands(true),
-    getRepositories: () => git.repositories,
+    getRepositories: () => monitor?.repositories ?? [],
+    topologyReady: () => git.state === 'initialized',
+    recoverHiddenBaseline,
     minimumRepositoryCount: readMinimumRepositoryCount,
-    multipleSelectionMode: () =>
-      vscode.workspace.getConfiguration('scm')
-        .get<string>('repositories.selectionMode', 'multiple') !== 'single',
+    multipleSelectionMode: () => readSelectionMode() !== 'single',
     reconciler,
     onUnavailable: reason => {
       logger.info('Visibility filtering is not active.', { reason });
@@ -180,16 +209,47 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
     reconciler.setActionability(repository, value);
   };
 
-  const monitor = new GitRepositoryMonitor(git, {
-    onRepositoryOpened: () => visibility.requestRefresh(),
+  let monitorReady = false;
+  let fetchScheduler: RemoteFetchScheduler | undefined;
+  monitor = new GitRepositoryMonitor(git, {
+    onRepositoryOpened: () => {
+      if (!monitorReady || git.state !== 'initialized') return;
+      logger.info('Git repository topology changed.', {
+        change: 'opened',
+        repositoryCount: monitor.repositories.length,
+      });
+      visibility.requestRefresh();
+    },
+    onRepositoryReplaced: () => {
+      if (!monitorReady) return;
+      logger.debug('Git repository observation replaced.', {
+        repositoryCount: monitor.repositories.length,
+      });
+    },
     onRepositoryChanged: evaluateRepository,
     onRepositoryClosed: repository => {
       actionability.delete(repository.rootUri.toString());
       reconciler.removeRepository(repository);
+      if (!monitorReady || git.state !== 'initialized') return;
+      logger.info('Git repository topology changed.', {
+        change: 'closed',
+        repositoryCount: monitor.repositories.length,
+      });
       visibility.requestRefresh();
     },
   });
+  monitorReady = true;
   context.subscriptions.push(monitor);
+  context.subscriptions.push(git.onDidChangeState(state => {
+    logger.info('Git repository discovery state changed.', {
+      state,
+      repositoryCount: monitor.repositories.length,
+    });
+    if (state === 'initialized') {
+      visibility.requestRefresh();
+      void fetchScheduler?.refreshNow();
+    }
+  }));
   visibility.requestRefresh();
 
   const getActionability = (repository: GitRepository): RepositoryActionability | undefined =>
@@ -202,17 +262,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
   interface RepositoryFetchTarget extends RemoteFetchTarget {
     readonly repository: GitRepository;
   }
-  const fetchScheduler = new RemoteFetchScheduler({
+  fetchScheduler = new RemoteFetchScheduler({
     concurrency: 2,
     getTargets: () => {
+      if (git.state !== 'initialized') return [];
       if (!policy.includeIncomingCommits && !policy.includeOutgoingCommits) return [];
       return monitor.repositories
         .filter(repository => repository.state.remotes.length > 0)
         .map((repository): RepositoryFetchTarget => ({
           key: repository.rootUri.toString(),
           repository,
-          // Identity, not URI: a reopened repository is a new Git API object.
-          isLive: () => git.repositories.includes(repository),
+          isLive: () => monitor.getRepository(repository.rootUri.toString()) === repository,
           fetch: () => repository.fetch(),
         }));
     },
@@ -227,18 +287,30 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
       // this boundary deliberately records no raw exception text.
       logger.error('Remote refresh failed.', new Error('Built-in Git fetch failed.'));
     },
+    onRunStart: repositoryCount => {
+      logger.info('Remote refresh started.', { repositoryCount });
+    },
+    onRunComplete: result => {
+      logger.info('Remote refresh completed.', { ...result });
+      void visibility.audit();
+    },
   });
   context.subscriptions.push(fetchScheduler);
   remoteFailure = key => fetchScheduler.hasFailed(key) ? 'Remote refresh failed.' : undefined;
   let fetchIntervalMilliseconds = readFetchIntervalMilliseconds();
   fetchScheduler.setInterval(fetchIntervalMilliseconds);
   if (fetchIntervalMilliseconds > 0) void fetchScheduler.refreshNow();
+  const visibilityAuditTimer = setInterval(() => {
+    void visibility.audit();
+  }, visibilityAuditIntervalMilliseconds);
+  context.subscriptions.push({ dispose: () => clearInterval(visibilityAuditTimer) });
 
   const copyDiagnostics = async (): Promise<void> => {
     const diagnostics = createDiagnostics({
       extensionVersion,
       vscodeVersion: vscode.version,
       platform: `${process.platform}-${process.arch}`,
+      gitApiState: git.state,
       filteringEnabled,
       filteringActive: reconciler.enabled,
       compatible: reconciler.compatible,
@@ -306,17 +378,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
         'Reveal All',
       );
       if (confirmed !== 'Reveal All') return;
-      await vscode.commands.executeCommand(selectionModeCommands.single);
-      await new Promise(resolve => setTimeout(resolve, 250));
-      await vscode.commands.executeCommand(selectionModeCommands.multiple);
-      await new Promise(resolve => setTimeout(resolve, 250));
+      await resetAllNativeVisibility();
       logger.info('Revealed all repositories through the native selection-mode transition.');
       visibility.requestRefresh();
       await visibility.waitForIdle();
     }),
     vscode.workspace.onDidChangeConfiguration(event => {
       // A selection-mode change can make filtering possible again.
-      if (event.affectsConfiguration('scm.repositories.selectionMode')) {
+      if (
+        event.affectsConfiguration('scm.repositories.selectionMode')
+        && !resettingNativeVisibility
+      ) {
         visibility.requestRefresh();
       }
       if (!event.affectsConfiguration('repofocus')) return;
@@ -343,6 +415,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
 
   logger.info('RepoFocus started.', {
     version: extensionVersion,
+    gitState: git.state,
+    repositoryCount: monitor.repositories.length,
     filteringEnabled,
     ...policy,
     alwaysShowPatterns: alwaysShowPatterns.length,
@@ -353,6 +427,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
   let shutdownPromise: Promise<void> | undefined;
   const shutdown = (): Promise<void> => {
     shutdownPromise ??= (async () => {
+      clearInterval(visibilityAuditTimer);
       monitor.dispose();
       visibility.dispose();
       fetchScheduler.dispose();
@@ -381,6 +456,8 @@ function describeMappingState(state: string): string | undefined {
     case 'awaiting-native-commands':
       return 'RepoFocus is waiting for VS Code to create its internal repository-visibility '
         + 'commands. Open the Source Control view once and filtering will start.';
+    case 'loading-repositories':
+      return 'RepoFocus is waiting for VS Code to finish its initial Git repository scan.';
     case 'repositories-already-hidden':
       return 'RepoFocus cannot filter while repositories are already hidden in the Source '
         + 'Control Repositories view. Run RepoFocus: Reveal All Repositories in Source Control.';

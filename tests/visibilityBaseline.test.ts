@@ -3,6 +3,7 @@ import type { GitRepository } from '../src/gitApi';
 import {
   probeVisibilityMappings,
   RepositoriesAlreadyHiddenError,
+  VisibilityProbeInterruptedError,
   type VisibilityProbeLedger,
 } from '../src/visibilityBaseline';
 
@@ -78,6 +79,40 @@ describe('probeVisibilityMappings', () => {
     expect(executed.some(command => command.includes('setSelectionMode'))).toBe(false);
   });
 
+  it('waits for a delayed native focus update before deciding a toggle did not match', async () => {
+    const names = ['alpha', 'beta'];
+    const visible = new Set(names);
+    let selectedName = names[0];
+    const repositories = names.map(name => repository(name, () => selectedName === name));
+    const targets = new Map(names.map((name, index) => [`toggle.scm${index}`, name]));
+    const { ledger } = ledgerOver(command => {
+      const target = targets.get(command);
+      if (target !== undefined && visible.has(target)) {
+        setTimeout(() => {
+          visible.delete(target);
+          if (selectedName === target) {
+            selectedName = names.find(name => visible.has(name)) ?? selectedName;
+          }
+        }, 20);
+      } else if (target !== undefined) {
+        visible.add(target);
+      }
+      return Promise.resolve();
+    });
+
+    const mappings = await probeVisibilityMappings(
+      repositories,
+      [...targets.keys()],
+      ledger,
+      { selectionTimeoutMilliseconds: 100 },
+    );
+
+    expect(mappings.map(mapping => [mapping.repository.rootUri.toString(), mapping.command])).toEqual([
+      ['file:///alpha', 'toggle.scm0'],
+      ['file:///beta', 'toggle.scm1'],
+    ]);
+  });
+
   it('reports repositories that were already hidden instead of guessing', async () => {
     const world = nativeWorld(['alpha', 'beta', 'gamma'], ['gamma']);
     const { ledger } = ledgerOver(world.execute);
@@ -115,6 +150,23 @@ describe('probeVisibilityMappings', () => {
       ledger,
       fastTimings,
     )).rejects.toThrow(failure);
+    expect([...hidden]).toEqual(['toggle.scm0']);
+  });
+
+  it('interrupts a stale probe while retaining ownership of its last hide', async () => {
+    const world = nativeWorld(['alpha', 'beta']);
+    let current = true;
+    const { ledger, hidden } = ledgerOver(async command => {
+      await world.execute(command);
+      current = false;
+    });
+
+    await expect(probeVisibilityMappings(
+      world.repositories,
+      world.commands,
+      ledger,
+      { ...fastTimings, isCurrent: () => current },
+    )).rejects.toBeInstanceOf(VisibilityProbeInterruptedError);
     expect([...hidden]).toEqual(['toggle.scm0']);
   });
 

@@ -8,6 +8,14 @@ export class VisibilityProbeError extends Error {
   }
 }
 
+/** The repository topology changed while a visibility probe was in flight. */
+export class VisibilityProbeInterruptedError extends Error {
+  constructor() {
+    super('Repository topology changed during native visibility mapping.');
+    this.name = 'VisibilityProbeInterruptedError';
+  }
+}
+
 /**
  * Repositories were hidden in the native Repositories view before RepoFocus
  * mapped, so they cannot be identified: focus transfer is the only signal VS
@@ -33,7 +41,10 @@ export interface VisibilityProbeLedger {
 export interface VisibilityProbeTimings {
   readonly probeMilliseconds?: number;
   readonly selectionTimeoutMilliseconds?: number;
+  readonly isCurrent?: () => boolean;
 }
+
+export const DEFAULT_PROBE_MILLISECONDS = 100;
 
 function selectedRepository(repositories: readonly GitRepository[]): GitRepository | undefined {
   const selected = repositories.filter(repository => repository.ui.selected);
@@ -43,9 +54,11 @@ function selectedRepository(repositories: readonly GitRepository[]): GitReposito
 async function waitForSelectedRepository(
   repositories: readonly GitRepository[],
   timeoutMilliseconds: number,
+  assertCurrent: () => void,
 ): Promise<GitRepository> {
   const deadline = Date.now() + timeoutMilliseconds;
   do {
+    assertCurrent();
     const selected = selectedRepository(repositories);
     if (selected) return selected;
     await new Promise(resolve => setTimeout(resolve, 10));
@@ -57,9 +70,11 @@ async function waitForDifferentSelection(
   repositories: readonly GitRepository[],
   previousKey: string,
   timeoutMilliseconds: number,
+  assertCurrent: () => void,
 ): Promise<GitRepository | undefined> {
   const deadline = Date.now() + timeoutMilliseconds;
   for (;;) {
+    assertCurrent();
     const selected = selectedRepository(repositories);
     if (selected && selected.rootUri.toString() !== previousKey) return selected;
     if (Date.now() >= deadline) return undefined;
@@ -83,26 +98,44 @@ export async function probeVisibilityMappings(
   ledger: VisibilityProbeLedger,
   timings: VisibilityProbeTimings = {},
 ): Promise<readonly VisibilityMapping[]> {
-  const probeMilliseconds = timings.probeMilliseconds ?? 0;
+  const probeMilliseconds = timings.probeMilliseconds ?? DEFAULT_PROBE_MILLISECONDS;
   const selectionTimeoutMilliseconds = timings.selectionTimeoutMilliseconds ?? 1_000;
+  const assertCurrent = (): void => {
+    if (timings.isCurrent?.() === false) throw new VisibilityProbeInterruptedError();
+  };
   const remainingCommands = [...candidateCommands];
   const mappings: VisibilityMapping[] = [];
 
   while (remainingCommands.length > 0) {
-    const current = await waitForSelectedRepository(repositories, selectionTimeoutMilliseconds);
+    const current = await waitForSelectedRepository(
+      repositories,
+      selectionTimeoutMilliseconds,
+      assertCurrent,
+    );
     const currentKey = current.rootUri.toString();
     let matchedIndex = -1;
     for (let index = 0; index < remainingCommands.length; index += 1) {
       const command = remainingCommands[index];
+      assertCurrent();
       await ledger.hide(command);
-      // Native focus is updated before executeCommand resolves. Avoid a timer
-      // here so the reversible probes are not painted one by one.
-      if (await waitForDifferentSelection(repositories, currentKey, probeMilliseconds)) {
+      assertCurrent();
+      // executeCommand resolves before the extension-host Git wrapper always
+      // observes the resulting focus change. Windows exposes this gap under
+      // load, so wait for bounded convergence instead of immediately undoing a
+      // hide that actually matched the focused repository.
+      if (await waitForDifferentSelection(
+        repositories,
+        currentKey,
+        probeMilliseconds,
+        assertCurrent,
+      )) {
         mappings.push({ repository: current, command });
         matchedIndex = index;
         break;
       }
+      assertCurrent();
       await ledger.reveal(command);
+      assertCurrent();
     }
     // No command moved focus: the focused repository is the only visible one.
     if (matchedIndex === -1) break;
@@ -120,7 +153,11 @@ export async function probeVisibilityMappings(
     throw new RepositoriesAlreadyHiddenError(remainingCommands.length);
   }
 
-  const lastVisible = await waitForSelectedRepository(repositories, selectionTimeoutMilliseconds);
+  const lastVisible = await waitForSelectedRepository(
+    repositories,
+    selectionTimeoutMilliseconds,
+    assertCurrent,
+  );
   mappings.push({ repository: lastVisible, command: remainingCommands[0] });
 
   const mappedRepositories = new Set(mappings.map(mapping => mapping.repository.rootUri.toString()));

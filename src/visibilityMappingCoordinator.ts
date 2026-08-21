@@ -19,6 +19,7 @@ export interface VisibilityInitialization {
 /** Why filtering is not running, when nothing has failed outright. */
 export type VisibilityUnavailableReason =
   | 'awaiting-native-commands'
+  | 'loading-repositories'
   | 'repositories-already-hidden'
   | 'single-selection-mode'
   | 'other-scm-providers';
@@ -27,6 +28,8 @@ export interface VisibilityMappingCoordinatorOptions {
   readonly filteringRequested: () => boolean;
   readonly getCommands: () => Promise<readonly string[]>;
   readonly getRepositories: () => readonly GitRepository[];
+  readonly topologyReady?: () => boolean;
+  readonly recoverHiddenBaseline?: () => Promise<void>;
   readonly minimumRepositoryCount: () => number;
   readonly multipleSelectionMode: () => boolean;
   readonly reconciler: VisibilityReconciler;
@@ -55,6 +58,9 @@ export class VisibilityMappingCoordinator {
   private waitingForCommands = false;
   private unavailableReason: VisibilityUnavailableReason | undefined;
   private reportedReason: VisibilityUnavailableReason | undefined;
+  private mappedRepositoryKeys = new Set<string>();
+  private mappedCommands = new Set<string>();
+  private hiddenRecoveryAttempted = false;
 
   constructor(private readonly options: VisibilityMappingCoordinatorOptions) {}
 
@@ -70,6 +76,7 @@ export class VisibilityMappingCoordinator {
   }
 
   requestRefresh(): void {
+    this.hiddenRecoveryAttempted = false;
     this.queueRefresh(true, true);
   }
 
@@ -81,6 +88,44 @@ export class VisibilityMappingCoordinator {
    */
   retryIfUnavailable(): void {
     if (this.mappingState === 'mapped') return;
+    this.requestRefresh();
+  }
+
+  /**
+   * A cheap convergence check for startup, remote-refresh completion, and a
+   * low-frequency timer. It never probes or toggles a healthy mapping.
+   */
+  async audit(): Promise<void> {
+    if (this.disposed || !this.options.reconciler.compatible || this.run) return;
+    const repositories = [...this.options.getRepositories()];
+    const shouldFilter = this.options.filteringRequested()
+      && repositories.length >= this.options.minimumRepositoryCount();
+    if (!shouldFilter) {
+      await this.updateFiltering();
+      return;
+    }
+    if (this.options.topologyReady?.() === false || !this.hasBaseline) {
+      this.requestRefresh();
+      return;
+    }
+
+    try {
+      const discovery = discoverVisibilityCommands(
+        repositories.length,
+        await this.options.getCommands(),
+      );
+      const repositoryKeys = new Set(repositories.map(repository => repository.rootUri.toString()));
+      if (
+        discovery.kind === 'ready'
+        && sameSet(repositoryKeys, this.mappedRepositoryKeys)
+        && sameSet(new Set(discovery.commands), this.mappedCommands)
+        && this.options.reconciler.enabled
+      ) {
+        return;
+      }
+    } catch {
+      // The normal refresh path classifies and reports the exact failure.
+    }
     this.requestRefresh();
   }
 
@@ -172,6 +217,11 @@ export class VisibilityMappingCoordinator {
       return;
     }
 
+    if (this.options.topologyReady?.() === false) {
+      await this.standDown('loading-repositories', revision);
+      return;
+    }
+
     // `single` mode can show only one repository at a time, so the whole model
     // is impossible there. RepoFocus reads the setting and never writes it.
     if (!this.options.multipleSelectionMode()) {
@@ -214,12 +264,19 @@ export class VisibilityMappingCoordinator {
         repositories,
         commands,
         this.options.reconciler,
-        this.options.probeTimings,
+        {
+          ...this.options.probeTimings,
+          isCurrent: () => revision === this.revision && !this.disposed,
+        },
       );
       if (revision !== this.revision || this.disposed) return;
 
       this.options.reconciler.setMappings(mappings);
       this.hasBaseline = true;
+      this.mappedRepositoryKeys = new Set(
+        mappings.map(mapping => mapping.repository.rootUri.toString()),
+      );
+      this.mappedCommands = new Set(mappings.map(mapping => mapping.command));
       this.waitingForCommands = false;
       this.unavailableReason = undefined;
       this.reportedReason = undefined;
@@ -235,6 +292,18 @@ export class VisibilityMappingCoordinator {
       await this.options.reconciler.restoreOwned();
       if (revision !== this.revision || this.disposed) return;
       if (error instanceof RepositoriesAlreadyHiddenError) {
+        if (this.options.recoverHiddenBaseline && !this.hiddenRecoveryAttempted) {
+          this.hiddenRecoveryAttempted = true;
+          try {
+            await this.options.recoverHiddenBaseline();
+          } catch (recoveryError) {
+            await this.options.reconciler.failCompatibility(recoveryError);
+            return;
+          }
+          if (revision !== this.revision || this.disposed) return;
+          this.queueRefresh(false, false);
+          return;
+        }
         await this.standDown('repositories-already-hidden', revision);
         return;
       }
@@ -308,4 +377,10 @@ export class VisibilityMappingCoordinator {
     clearTimeout(this.commandPollTimer);
     this.commandPollTimer = undefined;
   }
+}
+
+function sameSet(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
+  if (left.size !== right.size) return false;
+  for (const value of left) if (!right.has(value)) return false;
+  return true;
 }

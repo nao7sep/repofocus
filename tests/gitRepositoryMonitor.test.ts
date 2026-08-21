@@ -53,13 +53,23 @@ function api(initial: readonly GitRepository[] = []): {
   api: GitApi;
   opened: TestEvent<GitRepository>;
   closed: TestEvent<GitRepository>;
+  setRepositories(repositories: readonly GitRepository[]): void;
 } {
   const opened = new TestEvent<GitRepository>();
   const closed = new TestEvent<GitRepository>();
+  const stateChanged = new TestEvent<'initialized' | 'uninitialized'>();
+  let repositories = initial;
   return {
-    api: { repositories: initial, onDidOpenRepository: opened.event, onDidCloseRepository: closed.event },
+    api: {
+      state: 'initialized',
+      onDidChangeState: stateChanged.event,
+      get repositories() { return repositories; },
+      onDidOpenRepository: opened.event,
+      onDidCloseRepository: closed.event,
+    },
     opened,
     closed,
+    setRepositories: value => { repositories = value; },
   };
 }
 
@@ -98,6 +108,7 @@ describe('GitRepositoryMonitor', () => {
     const fixture = api([alpha.repository]);
     const monitor = new GitRepositoryMonitor(fixture.api, { onRepositoryChanged: changed, onRepositoryClosed });
 
+    fixture.setRepositories([]);
     fixture.closed.fire(alpha.repository);
     alpha.changes.fire();
 
@@ -105,6 +116,72 @@ describe('GitRepositoryMonitor', () => {
     expect(monitor.repositories).toEqual([]);
     expect(changed).toHaveBeenCalledTimes(1);
     expect(onRepositoryClosed).toHaveBeenCalledWith(alpha.repository);
+    monitor.dispose();
+  });
+
+  it('matches close events by URI because the Git API returns fresh wrappers', () => {
+    const alpha = repository('alpha');
+    const openedWrapper = { ...alpha.repository };
+    const closedWrapper = { ...alpha.repository };
+    const changed = vi.fn();
+    const onRepositoryClosed = vi.fn();
+    const fixture = api([openedWrapper]);
+    const monitor = new GitRepositoryMonitor(fixture.api, { onRepositoryChanged: changed, onRepositoryClosed });
+
+    fixture.setRepositories([]);
+    fixture.closed.fire(closedWrapper);
+    alpha.changes.fire();
+
+    expect(monitor.repositories).toEqual([]);
+    expect(onRepositoryClosed).toHaveBeenCalledWith(openedWrapper);
+    expect(changed).toHaveBeenCalledTimes(1);
+    monitor.dispose();
+  });
+
+  it('replaces a same-URI observation without reporting a topology change', () => {
+    const original = repository('alpha');
+    const replacement = repository('alpha');
+    const changed = vi.fn();
+    const onRepositoryOpened = vi.fn();
+    const onRepositoryReplaced = vi.fn();
+    const fixture = api([original.repository]);
+    const monitor = new GitRepositoryMonitor(fixture.api, {
+      onRepositoryOpened,
+      onRepositoryReplaced,
+      onRepositoryChanged: changed,
+    });
+    onRepositoryOpened.mockClear();
+    changed.mockClear();
+
+    fixture.setRepositories([replacement.repository]);
+    fixture.opened.fire(replacement.repository);
+    original.changes.fire();
+    replacement.changes.fire();
+
+    expect(monitor.repositories).toEqual([replacement.repository]);
+    expect(onRepositoryOpened).not.toHaveBeenCalled();
+    expect(onRepositoryReplaced).toHaveBeenCalledWith(replacement.repository);
+    expect(changed).toHaveBeenCalledTimes(2);
+    monitor.dispose();
+  });
+
+  it('ignores a stale close when a same-URI replacement remains open', () => {
+    const original = repository('alpha');
+    const replacement = repository('alpha');
+    const onRepositoryClosed = vi.fn();
+    const fixture = api([original.repository]);
+    const monitor = new GitRepositoryMonitor(fixture.api, {
+      onRepositoryChanged: vi.fn(),
+      onRepositoryClosed,
+    });
+
+    fixture.setRepositories([replacement.repository]);
+    fixture.opened.fire(replacement.repository);
+    fixture.closed.fire({ ...original.repository });
+
+    expect(monitor.repositories).toHaveLength(1);
+    expect(monitor.repositories[0]?.rootUri.toString()).toBe('file:///alpha');
+    expect(onRepositoryClosed).not.toHaveBeenCalled();
     monitor.dispose();
   });
 

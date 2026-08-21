@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Logger } from '../src/logger';
 
 function capture(debugEnabled = false): { lines: string[]; logger: Logger } {
@@ -17,6 +17,15 @@ describe('Logger', () => {
       message: 'Filtering started',
       repositoryCount: 15,
     });
+  });
+
+  it('falls back to the host console when the output channel is closed', () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const logger = new Logger({ appendLine: () => { throw new Error('closed'); } }, false);
+
+    expect(() => logger.info('Stopping')).not.toThrow();
+    expect(consoleError).toHaveBeenCalledTimes(2);
+    consoleError.mockRestore();
   });
 
   it('redacts exact denied field names recursively without changing similar names', () => {

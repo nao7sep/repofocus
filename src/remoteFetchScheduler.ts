@@ -46,6 +46,16 @@ export interface RemoteFetchSchedulerOptions {
   readonly fetchTimeoutMilliseconds?: number;
   readonly onError?: (target: RemoteFetchTarget, error: unknown) => void;
   readonly onSuccess?: (target: RemoteFetchTarget) => void;
+  readonly onRunStart?: (targetCount: number) => void;
+  readonly onRunComplete?: (result: RemoteFetchRunResult) => void;
+}
+
+export interface RemoteFetchRunResult {
+  readonly targetCount: number;
+  readonly successCount: number;
+  readonly failureCount: number;
+  readonly staleCount: number;
+  readonly durationMilliseconds: number;
 }
 
 export class RemoteFetchScheduler implements DisposableLike {
@@ -150,6 +160,12 @@ export class RemoteFetchScheduler implements DisposableLike {
     while (this.requested && !this.disposed) {
       this.requested = false;
       const targets = [...this.options.getTargets()];
+      if (targets.length === 0) continue;
+      const startedAt = Date.now();
+      let successCount = 0;
+      let failureCount = 0;
+      let staleCount = 0;
+      this.options.onRunStart?.(targets.length);
       let next = 0;
       const worker = async (): Promise<void> => {
         while (!this.disposed) {
@@ -162,17 +178,34 @@ export class RemoteFetchScheduler implements DisposableLike {
             // A dead target records nothing: its key may already name a
             // different repository, and attributing this result to that one
             // would be worse than having no result at all.
-            if (this.disposed || !this.isLive(target)) continue;
+            if (this.disposed || !this.isLive(target)) {
+              staleCount += 1;
+              continue;
+            }
             this.failures.delete(target.key);
+            successCount += 1;
             this.options.onSuccess?.(target);
           } catch (error) {
-            if (this.disposed || !this.isLive(target)) continue;
+            if (this.disposed || !this.isLive(target)) {
+              staleCount += 1;
+              continue;
+            }
             this.failures.set(target.key, target);
+            failureCount += 1;
             this.options.onError?.(target, error);
           }
         }
       };
       await Promise.all(Array.from({ length: Math.min(this.concurrency, targets.length) }, worker));
+      if (!this.disposed) {
+        this.options.onRunComplete?.({
+          targetCount: targets.length,
+          successCount,
+          failureCount,
+          staleCount,
+          durationMilliseconds: Date.now() - startedAt,
+        });
+      }
     }
   }
 

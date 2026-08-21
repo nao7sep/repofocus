@@ -4,6 +4,7 @@ export interface RepoFocusDiagnosticsInput {
   readonly extensionVersion: string;
   readonly vscodeVersion: string;
   readonly platform: string;
+  readonly gitApiState: string;
   readonly filteringEnabled: boolean;
   readonly filteringActive: boolean;
   readonly compatible: boolean;
@@ -32,6 +33,7 @@ export function createDiagnostics(input: RepoFocusDiagnosticsInput): string {
     extensionVersion: input.extensionVersion,
     vscodeVersion: input.vscodeVersion,
     platform: input.platform,
+    gitApiState: input.gitApiState,
     filteringEnabled: input.filteringEnabled,
     filteringActive: input.filteringActive,
     compatible: input.compatible,

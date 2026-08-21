@@ -18,6 +18,11 @@ const configuredVscodeExecutablePath = process.env.VSCODE_EXECUTABLE_PATH;
 const localVscodeExecutablePath = '/Applications/Visual Studio Code.app/Contents/MacOS/Code';
 const vscodeExecutablePath = configuredVscodeExecutablePath
   ?? (existsSync(localVscodeExecutablePath) ? localVscodeExecutablePath : undefined);
+const repositoryCount = Number(process.env.REPOFOCUS_INTEGRATION_REPOSITORY_COUNT ?? '15');
+
+if (!Number.isSafeInteger(repositoryCount) || repositoryCount < 2) {
+  throw new Error('REPOFOCUS_INTEGRATION_REPOSITORY_COUNT must be an integer of at least 2.');
+}
 
 function git(repositoryPath, ...args) {
   execFileSync('git', args, { cwd: repositoryPath, stdio: 'ignore' });
@@ -41,7 +46,7 @@ async function createRepositoryAt(repositoryPath) {
 try {
   await createRepository('alpha');
   await createRepository('beta');
-  for (let index = 3; index <= 15; index += 1) {
+  for (let index = 3; index <= repositoryCount; index += 1) {
     await createRepository(`repo-${String(index).padStart(2, '0')}`);
   }
   const alphaPath = join(fixtureRoot, 'alpha');
@@ -63,7 +68,7 @@ try {
     extensionTestsEnv: {
       REPOFOCUS_INTEGRATION_ROOT: fixtureRoot,
       REPOFOCUS_INTEGRATION_UPDATER: alphaUpdaterPath,
-      REPOFOCUS_INTEGRATION_REPOSITORY_COUNT: '15',
+      REPOFOCUS_INTEGRATION_REPOSITORY_COUNT: String(repositoryCount),
       REPOFOCUS_VISUAL_PAUSE_MS: process.env.REPOFOCUS_VISUAL_PAUSE_MS ?? '0',
     },
     launchArgs: [

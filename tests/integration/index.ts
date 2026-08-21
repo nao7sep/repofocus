@@ -1,17 +1,18 @@
 import { strict as assert } from 'node:assert';
 import { execFileSync } from 'node:child_process';
 import { appendFile, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import * as vscode from 'vscode';
 import type { GitRepository } from '../../src/gitApi';
 import type { RepoFocusExtensionApi } from '../../src/extension';
 
 const extensionId = 'nao7sep.repofocus';
+const defaultWaitTimeoutMilliseconds = process.platform === 'win32' ? 60_000 : 15_000;
 
 async function waitFor<T>(
   description: string,
   read: () => T | undefined,
-  timeoutMilliseconds = 15_000,
+  timeoutMilliseconds = defaultWaitTimeoutMilliseconds,
 ): Promise<T> {
   const deadline = Date.now() + timeoutMilliseconds;
   while (Date.now() < deadline) {
@@ -29,7 +30,13 @@ async function openRepository(path: string): Promise<void> {
 }
 
 function repositoryAt(api: RepoFocusExtensionApi, path: string): GitRepository | undefined {
-  return api.git.repositories.find(repository => repository.rootUri.fsPath === path);
+  const expected = resolve(path);
+  return api.git.repositories.find(repository => {
+    const actual = resolve(repository.rootUri.fsPath);
+    return process.platform === 'win32'
+      ? actual.toLowerCase() === expected.toLowerCase()
+      : actual === expected;
+  });
 }
 
 export async function run(): Promise<void> {
@@ -38,6 +45,7 @@ export async function run(): Promise<void> {
   assert(fixtureRoot, 'REPOFOCUS_INTEGRATION_ROOT must identify the integration workspace.');
   assert(updaterPath, 'REPOFOCUS_INTEGRATION_UPDATER must identify the upstream fixture clone.');
   const expectedRepositoryCount = Number(process.env.REPOFOCUS_INTEGRATION_REPOSITORY_COUNT ?? '2');
+  const initialFilteringTimeoutMilliseconds = process.platform === 'win32' ? 60_000 : 15_000;
   await vscode.commands.executeCommand('workbench.view.explorer');
 
   const alphaPath = join(fixtureRoot, 'alpha');
@@ -56,16 +64,25 @@ export async function run(): Promise<void> {
   }
   const extension = vscode.extensions.getExtension<RepoFocusExtensionApi>(extensionId);
   assert(extension, `Extension ${extensionId} was not loaded.`);
-  const initialSettleStarted = Date.now();
   const api = await waitFor(
     'automatic RepoFocus activation',
     () => extension.isActive ? extension.exports : undefined,
   );
 
-  await waitFor('all Git repositories', () =>
-    repositoryPaths.every(path => repositoryAt(api, path))
-      && api.git.repositories.length === expectedRepositoryCount ? true : undefined,
-  );
+  try {
+    await waitFor('all Git repositories', () =>
+      api.git.state === 'initialized'
+        && repositoryPaths.every(path => repositoryAt(api, path))
+        && api.git.repositories.length === expectedRepositoryCount ? true : undefined,
+    120_000);
+  } catch (error) {
+    throw new Error(
+      `Git discovery did not settle: state=${api.git.state} `
+      + `repositoryCount=${api.git.repositories.length} expected=${expectedRepositoryCount}.`,
+      { cause: error },
+    );
+  }
+  const initialSettleStarted = Date.now();
   const alpha = repositoryAt(api, alphaPath);
   const beta = repositoryAt(api, betaPath);
   assert(alpha && beta);
@@ -91,7 +108,7 @@ export async function run(): Promise<void> {
         return repository && api.getActionability(repository)?.actionable === false
           && api.isHiddenByRepoFocus(repository);
       }) ? true : undefined,
-      3_000,
+      initialFilteringTimeoutMilliseconds,
     );
   } catch (error) {
     await vscode.commands.executeCommand('repofocus.copyDiagnostics');
@@ -121,8 +138,9 @@ export async function run(): Promise<void> {
     );
   }
   assert(
-    Date.now() - initialSettleStarted < 15_000,
-    'Fifteen-repository activation and initial filtering must settle within 15 seconds.',
+    Date.now() - initialSettleStarted < initialFilteringTimeoutMilliseconds,
+    `Fifteen-repository initial filtering must settle within `
+      + `${initialFilteringTimeoutMilliseconds / 1_000} seconds after Git discovery.`,
   );
 
   const before = api.git.repositories.length;

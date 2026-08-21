@@ -450,7 +450,85 @@ describe('VisibilityMappingCoordinator', () => {
     expect(onError.mock.calls[0][0]).toBe(failure);
   });
 
-  it('finishes an in-flight mapping transaction before processing a newer topology', async () => {
+  it('waits for the Git API initial scan before discovering or toggling repositories', async () => {
+    const native = nativeRepositories(['alpha', 'beta']);
+    const onUnavailable = vi.fn();
+    const execute = vi.fn(native.execute);
+    const getCommands = vi.fn(() => Promise.resolve(native.discoveryCommands));
+    const reconciler = new VisibilityReconciler({ toggle: execute });
+    for (const repository of native.repositories) reconciler.setActionability(repository, clean);
+    let ready = false;
+    const coordinator = new VisibilityMappingCoordinator({
+      filteringRequested: () => true,
+      getCommands,
+      getRepositories: () => native.repositories,
+      topologyReady: () => ready,
+      multipleSelectionMode: () => true,
+      minimumRepositoryCount: () => 2,
+      reconciler,
+      onUnavailable,
+      probeTimings: { probeMilliseconds: 1 },
+      topologySettleMilliseconds: 0,
+    });
+
+    coordinator.requestRefresh();
+    await coordinator.waitForIdle();
+
+    expect(coordinator.mappingState).toBe('loading-repositories');
+    expect(onUnavailable).toHaveBeenCalledWith('loading-repositories');
+    expect(getCommands).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+
+    ready = true;
+    coordinator.requestRefresh();
+    await coordinator.waitForIdle();
+
+    expect(coordinator.baselineEstablished).toBe(true);
+    expect(reconciler.hiddenRepositoryCount).toBe(2);
+  });
+
+  it('resets a hidden startup baseline once and then maps from the recovered state', async () => {
+    const native = nativeRepositories(['alpha', 'beta']);
+    let recovered = false;
+    const recoverHiddenBaseline = vi.fn(async () => { recovered = true; });
+    const toggle = vi.fn((command: string) => recovered ? native.execute(command) : Promise.resolve());
+    const reconciler = new VisibilityReconciler({ toggle });
+    for (const repository of native.repositories) reconciler.setActionability(repository, clean);
+    const coordinator = new VisibilityMappingCoordinator({
+      filteringRequested: () => true,
+      getCommands: () => Promise.resolve(native.discoveryCommands),
+      getRepositories: () => native.repositories,
+      recoverHiddenBaseline,
+      multipleSelectionMode: () => true,
+      minimumRepositoryCount: () => 2,
+      reconciler,
+      probeTimings: { probeMilliseconds: 1 },
+      topologySettleMilliseconds: 0,
+    });
+
+    coordinator.requestRefresh();
+    await coordinator.waitForIdle();
+
+    expect(recoverHiddenBaseline).toHaveBeenCalledOnce();
+    expect(coordinator.baselineEstablished).toBe(true);
+  });
+
+  it('audits a healthy mapping without probing or toggling it again', async () => {
+    const fixture = coordinatorFixture(['alpha', 'beta']);
+    fixture.coordinator.requestRefresh();
+    await fixture.coordinator.waitForIdle();
+    const togglesAfterMapping = fixture.execute.mock.calls.length;
+    const commandReadsAfterMapping = fixture.getCommands.mock.calls.length;
+
+    await fixture.coordinator.audit();
+    await fixture.coordinator.waitForIdle();
+
+    expect(fixture.getCommands).toHaveBeenCalledTimes(commandReadsAfterMapping + 1);
+    expect(fixture.execute).toHaveBeenCalledTimes(togglesAfterMapping);
+    expect(fixture.coordinator.baselineEstablished).toBe(true);
+  });
+
+  it('aborts an in-flight mapping transaction before processing a newer topology', async () => {
     const initialized = vi.fn();
     const native = nativeRepositories(['alpha']);
     let requestedDuringTransaction = false;

@@ -21,17 +21,18 @@
 
 import { strict as assert } from 'node:assert';
 import { writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, isAbsolute, join, resolve } from 'node:path';
 import * as vscode from 'vscode';
 import type { GitRepository } from '../../src/gitApi';
 import type { RepoFocusExtensionApi } from '../../src/extension';
 
 const extensionId = 'nao7sep.repofocus';
+const defaultWaitTimeoutMilliseconds = process.platform === 'win32' ? 60_000 : 15_000;
 
 async function waitFor<T>(
   description: string,
   read: () => T | undefined,
-  timeoutMilliseconds = 15_000,
+  timeoutMilliseconds = defaultWaitTimeoutMilliseconds,
 ): Promise<T> {
   const deadline = Date.now() + timeoutMilliseconds;
   while (Date.now() < deadline) {
@@ -43,7 +44,13 @@ async function waitFor<T>(
 }
 
 function repositoryAt(api: RepoFocusExtensionApi, path: string): GitRepository | undefined {
-  return api.git.repositories.find(repository => repository.rootUri.fsPath === path);
+  const expected = resolve(path);
+  return api.git.repositories.find(repository => {
+    const actual = resolve(repository.rootUri.fsPath);
+    return process.platform === 'win32'
+      ? actual.toLowerCase() === expected.toLowerCase()
+      : actual === expected;
+  });
 }
 
 export async function run(): Promise<void> {
@@ -83,7 +90,7 @@ export async function run(): Promise<void> {
   // documented as workspace-relative. If VS Code ever starts returning a real relative
   // form here, this fails and the documented contract can be revisited.
   assert.ok(
-    firstMatchable.startsWith('/') && firstMatchable.endsWith('/shared'),
+    isAbsolute(firstMatchable) && basename(firstMatchable) === 'shared',
     `A folder-root repository is matched by absolute path today, got "${firstMatchable}".`,
   );
 

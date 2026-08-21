@@ -61,7 +61,11 @@ export interface GitRepository {
   status(): Promise<void>;
 }
 
+export type GitApiState = 'initialized' | 'uninitialized';
+
 export interface GitApi {
+  readonly state: GitApiState;
+  readonly onDidChangeState: EventLike<GitApiState>;
   readonly repositories: readonly GitRepository[];
   readonly onDidOpenRepository: EventLike<GitRepository>;
   readonly onDidCloseRepository: EventLike<GitRepository>;

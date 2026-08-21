@@ -52,12 +52,32 @@ export class Logger {
   }
 
   private write(level: LogLevel, message: string, fields: Readonly<Record<string, unknown>>): void {
-    const event = redact({
-      time: new Date().toISOString(),
-      level,
-      message,
-      ...fields,
-    });
-    this.sink.appendLine(JSON.stringify(event));
+    let line: string;
+    try {
+      const event = redact({
+        time: new Date().toISOString(),
+        level,
+        message,
+        ...fields,
+      });
+      line = JSON.stringify(event);
+    } catch (error) {
+      line = JSON.stringify({
+        time: new Date().toISOString(),
+        level: 'error',
+        message: 'Log event serialization failed.',
+        error: serializeError(error),
+      });
+    }
+
+    try {
+      this.sink.appendLine(line);
+    } catch (error) {
+      // A VS Code OutputChannel can close before extension deactivation has
+      // finished. Logging must not turn orderly recovery into an unhandled
+      // rejection, so fall back to the host process console.
+      console.error(line);
+      console.error('RepoFocus log sink failed.', error);
+    }
   }
 }

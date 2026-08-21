@@ -7,6 +7,7 @@ describe('createDiagnostics', () => {
       extensionVersion: '0.1.0',
       vscodeVersion: '1.131.0',
       platform: 'darwin-arm64',
+      gitApiState: 'initialized',
       filteringEnabled: true,
       filteringActive: true,
       compatible: true,
@@ -31,6 +32,7 @@ describe('createDiagnostics', () => {
     const parsed = JSON.parse(diagnostics) as Record<string, unknown>;
 
     expect(parsed).toMatchObject({
+      gitApiState: 'initialized',
       repositoryCount: 3,
       actionableRepositoryCount: 2,
       hiddenByRepoFocusCount: 1,
