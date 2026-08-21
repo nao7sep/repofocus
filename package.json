@@ -2,7 +2,7 @@
   "name": "repofocus",
   "displayName": "RepoFocus",
   "description": "Shows only actionable Git repositories in VS Code's native Source Control view.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "nao7sep",
   "license": "MIT",
   "icon": "icon.png",
