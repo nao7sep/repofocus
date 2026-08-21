@@ -72,7 +72,7 @@ Useful when judging whether something it did is a bug or a security problem:
 
 RepoFocus records only the repositories it hides. Disabling filtering, running **Show All Repositories**, losing compatibility, and extension shutdown all restore that owned set without closing Git repositories.
 
-RepoFocus also audits convergence after remote refreshes and once every five minutes. Concurrent audits coalesce. An audit compares stable repository identities and the native command set; it does not toggle a healthy list, and a paused state that requires a Git/configuration event or user retry is not retried by the timer. If the initial native list is already hidden, startup mapping restores an all-visible native state at most once per extension session and maps again.
+RepoFocus also audits convergence after remote refreshes and once every five minutes while the VS Code window is focused. Concurrent audits coalesce. An audit compares stable repository identities and the native command set; it does not toggle a healthy list, and a paused state that requires a Git/configuration event or user retry is not retried by the timer. If the initial native list is already hidden, startup mapping restores an all-visible native state at most once per extension session and maps again.
 
 If compatibility validation fails, run **RepoFocus: Copy Diagnostics**, then reload the VS Code window; a compatibility failure lasts for the life of the window by design. **RepoFocus: Show All Repositories** is offered as a recovery action only when repositories are actually still hidden, so a failure notification without it means nothing was left hidden.
 
