@@ -26,7 +26,7 @@ Filtering turns itself on the first time you open Source Control. To switch it o
 - A trusted local workspace. Virtual and untrusted workspaces are not supported.
 - Two or more Git repositories. Below that RepoFocus leaves everything visible, so opening a single repository is never affected.
 - Every Source Control provider in the window is a Git repository. VS Code's visibility commands cover all providers while RepoFocus can only read Git ones, so a workspace also running an SVN or Mercurial provider pauses filtering and says so rather than guessing.
-- VS Code's repository selection mode set to `multiple`, which is its default. RepoFocus reads that setting and stays out of the way when it is `single`. It never writes VS Code's own configuration without asking — one recovery command changes that single setting, and only after you confirm it.
+- VS Code's repository selection mode set to `multiple`, which is its default. RepoFocus stays out of the way when it is `single`. If VS Code restores a stale hidden-repository list while filtering is enabled, RepoFocus recovers by cycling this setting through `single` and back to `multiple`; the explicit reveal-all command uses the same mechanism after confirmation.
 
 Detecting commits to push or pull means fetching, so RepoFocus performs bounded background Git fetches and can trigger whatever authentication you already have configured for Git. Automatic fetching can be turned off.
 
@@ -34,7 +34,7 @@ To build from source: Node.js 22 or newer, and npm.
 
 ## Compatibility and safety
 
-VS Code does not expose repository visibility through its public extension API, so RepoFocus drives the built-in Source Control visibility commands instead. That is the honest cost of filtering the native view rather than building a replacement for it, and the extension is written around it: it validates those commands before using them, undoes its own visibility changes if validation or a later command fails, never closes a repository, and treats a state it could not evaluate as one that needs you.
+VS Code does not expose repository visibility through its public extension API, so RepoFocus drives the built-in Source Control visibility commands instead. That is the honest cost of filtering the native view rather than building a replacement for it, and the extension is written around it: it waits for the built-in Git extension to finish its initial repository scan, validates the visibility commands before using them, undoes its own visibility changes if validation or a later command fails, never closes a repository, and treats a state it could not evaluate as one that needs you.
 
 One limitation is worth stating plainly. VS Code creates its internal per-repository visibility commands only after Source Control has been opened, so an extension cannot tell "the view hasn't been opened yet" apart from "these commands were renamed by a VS Code update". RepoFocus reports which state it believes it is in through **RepoFocus: Copy Diagnostics** and its output channel rather than pretending to know. A change to the surrounding command family *is* detected and reported as a compatibility failure.
 
