@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { createAlwaysShowMatcher, matchesAlwaysShow } from '../src/alwaysShow';
+import {
+  compileAlwaysShowConfiguration,
+  createAlwaysShowMatcher,
+  matchesAlwaysShow,
+} from '../src/alwaysShow';
 
 describe('matchesAlwaysShow', () => {
   it.each([
@@ -64,5 +68,25 @@ describe('matchesAlwaysShow', () => {
 
     expect(createAlwaysShowMatcher(tooMany)('unrelated')).toBe(true);
     expect(createAlwaysShowMatcher(tooLong)('unrelated')).toBe(true);
+  });
+
+  it.each([
+    null,
+    'repofocus',
+    { repository: 'repofocus' },
+    [42],
+    ['repofocus', null],
+  ])('fails visible for malformed host configuration: %j', value => {
+    const configuration = compileAlwaysShowConfiguration(value);
+
+    expect(configuration.valid).toBe(false);
+    expect(configuration.matches('unrelated')).toBe(true);
+  });
+
+  it('retains only the aggregate count for a malformed array', () => {
+    const configuration = compileAlwaysShowConfiguration(['repofocus', null]);
+
+    expect(configuration.patternCount).toBe(2);
+    expect(configuration.valid).toBe(false);
   });
 });

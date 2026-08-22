@@ -40,9 +40,17 @@ export function matchesAlwaysShow(
 }
 
 /** Compile configuration once; repository state events only perform matches. */
-export function createAlwaysShowMatcher(
-  patterns: readonly string[],
-): (reportedPath: string) => boolean {
+export interface AlwaysShowConfiguration {
+  readonly patternCount: number;
+  readonly matches: (reportedPath: string) => boolean;
+  readonly valid: boolean;
+}
+
+export function compileAlwaysShowConfiguration(value: unknown): AlwaysShowConfiguration {
+  if (!Array.isArray(value)) {
+    return { patternCount: 0, matches: () => true, valid: false };
+  }
+  const patterns = value as readonly unknown[];
   if (
     patterns.length > MAX_ALWAYS_SHOW_PATTERNS
     || patterns.some(pattern => (
@@ -52,14 +60,23 @@ export function createAlwaysShowMatcher(
     // Settings normally reject this shape. If a hand-edited or synced value
     // bypasses validation, fail visible instead of compiling unbounded input or
     // hiding repositories whose exemption could not be evaluated.
-    return () => true;
+    return { patternCount: patterns.length, matches: () => true, valid: false };
   }
+  const validPatterns = patterns as readonly string[];
   // Brace expansion is not part of the documented pattern surface and can
   // multiply one setting into a very large generated pattern set.
   const options = { dot: true, nobrace: true, nocase: process.platform === 'win32' } as const;
-  const matchers = patterns.map(pattern => new Minimatch(normalize(pattern), options));
-  return reportedPath => {
-    const paths = candidates(reportedPath);
-    return matchers.some(matcher => paths.some(path => matcher.match(path)));
+  const matchers = validPatterns.map(pattern => new Minimatch(normalize(pattern), options));
+  return {
+    patternCount: validPatterns.length,
+    valid: true,
+    matches: reportedPath => {
+      const paths = candidates(reportedPath);
+      return matchers.some(matcher => paths.some(path => matcher.match(path)));
+    },
   };
+}
+
+export function createAlwaysShowMatcher(value: unknown): (reportedPath: string) => boolean {
+  return compileAlwaysShowConfiguration(value).matches;
 }

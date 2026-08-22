@@ -31,7 +31,7 @@ RepoFocus cycles the native repository selection mode through `single` and back 
 
 ## Visibility initialization
 
-RepoFocus activates when Source Control is opened. It waits for the built-in Git extension's initial scan and for VS Code to register one internal visibility command per Source Control provider. A single repository needs no mapping. A non-Git provider pauses filtering because RepoFocus cannot safely associate the provider with the opaque command.
+RepoFocus activates when Source Control opens, its view command runs, or a RepoFocus command is invoked. Built-in Git activation has a 10-second deadline. RepoFocus then waits for the built-in Git extension's initial scan and for VS Code to register one internal visibility command per Source Control provider. A single repository needs no mapping. A non-Git provider pauses filtering because RepoFocus cannot safely associate the provider with the opaque command.
 
 For two or more Git repositories, RepoFocus first establishes an all-visible baseline. It then maps commands without assuming that Git API order matches SCM registration order:
 
@@ -42,7 +42,7 @@ For two or more Git repositories, RepoFocus first establishes an all-visible bas
 
 This takes exactly `3N−3` reversible mapping toggles for `N` repositories rather than a quadratic command-by-repository search. The final reconciliation hides clean repositories. Mapping runs only after initialization, stable repository topology changes, a user selection-mode change that leaves multiple mode, or an explicit retry from a paused state.
 
-Each native command has a 10-second execution bound. The selection after each isolating change gets 1 second to settle, the complete mapping gets 60 seconds, and lazy command registration gets at most 100 attempts spaced 50 milliseconds apart. A topology revision interrupts stale work. RepoFocus serializes native commands, coalesces topology bursts, and restores its owned hides before stopping on failure. If a toggle rejects, its outcome is unknown: RepoFocus does not invert it again, waits up to one additional command bound for the underlying operation to settle, and uses the selection-mode reset to establish a known all-visible state. A command that never settles leaves visibility reported as unknown without further toggles.
+Each native command has a 10-second execution bound. The selection after each isolating change gets 1 second to settle, the complete mapping gets 60 seconds, and lazy command registration has one five-second overall deadline covering at most 100 attempts, host-call time, and the 50-millisecond retry spacing. A timed-out host read keeps its single operation slot until it actually settles; RepoFocus never starts a concurrent replacement. A topology revision interrupts stale work. RepoFocus serializes native commands, coalesces topology bursts, and restores its owned hides before stopping on failure. If a toggle rejects, its outcome is unknown: RepoFocus does not invert it again, waits up to one additional command bound for the underlying operation to settle, and uses the selection-mode reset to establish a known all-visible state. A command that never settles leaves visibility reported as unknown without further toggles.
 
 There is no periodic audit, command polling after the initial retry window, window-focus job, or network scheduler. Git-state events update one repository's classification; visibility reconciliation runs only when that repository crosses between clean and actionable.
 

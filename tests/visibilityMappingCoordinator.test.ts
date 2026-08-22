@@ -185,6 +185,68 @@ describe('VisibilityMappingCoordinator', () => {
     expect(getCommands).toHaveBeenCalledTimes(4);
   });
 
+  it('enforces one overall command-enumeration deadline without overlapping a stalled host call', async () => {
+    const native = nativeRepositories(['alpha', 'beta']);
+    const gate = new Promise<readonly string[]>(() => {});
+    const getCommands = vi.fn(() => gate);
+    const onError = vi.fn();
+    const reconciler = new VisibilityReconciler({ toggle: native.execute, onError });
+    const coordinator = new VisibilityMappingCoordinator({
+      filteringRequested: () => true,
+      getCommands,
+      getRepositories: () => native.repositories,
+      topologyReady: () => true,
+      resetNativeVisibility: native.reset,
+      reconciler,
+      commandRetryTimeoutMilliseconds: 10,
+      topologySettleMilliseconds: 0,
+    });
+
+    coordinator.requestRefresh();
+    await coordinator.waitForIdle();
+
+    expect(getCommands).toHaveBeenCalledOnce();
+    expect(reconciler.compatible).toBe(false);
+    expect((onError.mock.calls[0][0] as Error).message).toContain('command enumeration');
+  });
+
+  it('discards command enumeration that settles after its topology revision becomes stale', async () => {
+    const native = nativeRepositories(['alpha', 'beta']);
+    let resolveFirst!: (commands: readonly string[]) => void;
+    let markStarted!: () => void;
+    const first = new Promise<readonly string[]>(resolve => { resolveFirst = resolve; });
+    const started = new Promise<void>(resolve => { markStarted = resolve; });
+    const getCommands = vi.fn(() => {
+      if (getCommands.mock.calls.length === 1) {
+        markStarted();
+        return first;
+      }
+      return Promise.resolve(native.discoveryCommands);
+    });
+    const resetNativeVisibility = vi.fn(native.reset);
+    const reconciler = new VisibilityReconciler({ toggle: native.execute });
+    for (const repository of native.repositories) reconciler.setActionability(repository, clean);
+    const coordinator = new VisibilityMappingCoordinator({
+      filteringRequested: () => true,
+      getCommands,
+      getRepositories: () => native.repositories,
+      topologyReady: () => true,
+      resetNativeVisibility,
+      reconciler,
+      topologySettleMilliseconds: 0,
+    });
+
+    coordinator.requestRefresh();
+    await started;
+    coordinator.requestRefresh();
+    resolveFirst(native.discoveryCommands);
+    await coordinator.waitForIdle();
+
+    expect(getCommands).toHaveBeenCalledTimes(2);
+    expect(resetNativeVisibility).toHaveBeenCalledOnce();
+    expect(coordinator.baselineEstablished).toBe(true);
+  });
+
   it('coalesces refreshes requested before a mapping transaction begins', async () => {
     const fixture = coordinatorFixture(['alpha', 'beta']);
     const initialized = vi.fn();
@@ -229,11 +291,11 @@ describe('VisibilityMappingCoordinator', () => {
     await coordinator.waitForIdle();
 
     filteringRequested = false;
-    await coordinator.updateFiltering();
+    await coordinator.updateFiltering(false);
     expect(native.visible.size).toBe(2);
 
     filteringRequested = true;
-    await coordinator.updateFiltering();
+    await coordinator.updateFiltering(true);
     expect(native.visible.size).toBe(0);
     expect(getCommands).toHaveBeenCalledOnce();
     expect(resetNativeVisibility).toHaveBeenCalledOnce();

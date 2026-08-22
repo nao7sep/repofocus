@@ -10,6 +10,10 @@ import {
   VisibilityCompatibilityError,
 } from './visibilityCommandResolver';
 import type { VisibilityReconciler } from './visibilityReconciler';
+import {
+  HostOperationTimeoutError,
+  NonOverlappingHostOperation,
+} from './hostOperation';
 
 export interface VisibilityInitialization {
   readonly repositoryCount: number;
@@ -33,10 +37,12 @@ export interface VisibilityMappingCoordinatorOptions {
   readonly probeTimings?: VisibilityProbeTimings;
   readonly commandRetryAttempts?: number;
   readonly commandRetryMilliseconds?: number;
+  readonly commandRetryTimeoutMilliseconds?: number;
   readonly topologySettleMilliseconds?: number;
 }
 
 const minimumRepositoryCount = 2;
+export const DEFAULT_COMMAND_REGISTRATION_TIMEOUT_MILLISECONDS = 5_000;
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, milliseconds));
@@ -50,8 +56,12 @@ export class VisibilityMappingCoordinator {
   private hasBaseline = false;
   private unavailableReason: VisibilityUnavailableReason | undefined;
   private reportedReason: VisibilityUnavailableReason | undefined;
+  private filteringRequested: boolean;
+  private readonly commandEnumeration = new NonOverlappingHostOperation<readonly string[]>();
 
-  constructor(private readonly options: VisibilityMappingCoordinatorOptions) {}
+  constructor(private readonly options: VisibilityMappingCoordinatorOptions) {
+    this.filteringRequested = options.filteringRequested();
+  }
 
   get baselineEstablished(): boolean {
     return this.hasBaseline;
@@ -76,7 +86,8 @@ export class VisibilityMappingCoordinator {
     if (this.mappingState !== 'mapped') this.requestRefresh();
   }
 
-  async updateFiltering(): Promise<void> {
+  async updateFiltering(enabled = this.options.filteringRequested()): Promise<void> {
+    this.filteringRequested = enabled;
     const shouldFilter = this.shouldFilter();
     if (!shouldFilter) {
       await this.options.reconciler.setFilteringEnabled(false);
@@ -104,7 +115,7 @@ export class VisibilityMappingCoordinator {
   }
 
   private shouldFilter(repositories = this.options.getRepositories()): boolean {
-    return this.options.filteringRequested() && repositories.length >= minimumRepositoryCount;
+    return this.filteringRequested && repositories.length >= minimumRepositoryCount;
   }
 
   private async drain(): Promise<void> {
@@ -204,14 +215,28 @@ export class VisibilityMappingCoordinator {
   ): Promise<readonly string[] | undefined> {
     const attempts = this.options.commandRetryAttempts ?? 100;
     const retryMilliseconds = this.options.commandRetryMilliseconds ?? 50;
+    const timeoutMilliseconds = this.options.commandRetryTimeoutMilliseconds
+      ?? DEFAULT_COMMAND_REGISTRATION_TIMEOUT_MILLISECONDS;
+    if (!Number.isSafeInteger(timeoutMilliseconds) || timeoutMilliseconds < 1) {
+      throw new Error('Command registration timeout must be a positive safe integer.');
+    }
+    const deadline = Date.now() + timeoutMilliseconds;
     let lastError: unknown;
     let registrationPending = false;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       if (revision !== this.revision || this.disposed) return undefined;
+      const remaining = deadline - Date.now();
+      if (remaining < 1) break;
       try {
+        const registeredCommands = await this.commandEnumeration.wait(
+          this.options.getCommands,
+          remaining,
+          'VS Code command enumeration',
+        );
+        if (revision !== this.revision || this.disposed) return undefined;
         const discovery = discoverVisibilityCommands(
           repositoryCount,
-          await this.options.getCommands(),
+          registeredCommands,
         );
         registrationPending = discovery.kind === 'pending';
         if (discovery.kind === 'ready') return discovery.commands;
@@ -223,8 +248,13 @@ export class VisibilityMappingCoordinator {
         }
         throw new OtherScmProvidersError(discovery.commandCount, repositoryCount);
       } catch (error) {
+        if (error instanceof HostOperationTimeoutError) throw error;
         lastError = error;
-        if (attempt + 1 < attempts) await delay(retryMilliseconds);
+        if (attempt + 1 < attempts) {
+          const retryRemaining = deadline - Date.now();
+          if (retryRemaining < 1) break;
+          await delay(Math.min(retryMilliseconds, retryRemaining));
+        }
       }
     }
     if (registrationPending) return undefined;

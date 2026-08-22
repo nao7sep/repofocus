@@ -45,9 +45,35 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     environment: marketplace
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
     steps:
+      - name: Validate release tag
+        shell: bash
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "release tag must be an exact vMAJOR.MINOR.PATCH value" >&2
+            exit 1
+          fi
+
       - name: Check out source
         uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Verify exact tag and manifest version
+        shell: bash
+        run: |
+          checked_out_tag="$(git tag --points-at HEAD --list "$RELEASE_TAG")"
+          manifest_version="$(node -p "require('./package.json').version")"
+          if [[ "$checked_out_tag" != "$RELEASE_TAG" ]]; then
+            echo "checkout is not the requested exact tag: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          if [[ "v$manifest_version" != "$RELEASE_TAG" ]]; then
+            echo "tag $RELEASE_TAG does not match package version $manifest_version" >&2
+            exit 1
+          fi
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -64,7 +90,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release download "${{ inputs.tag }}" \
+          is_draft="$(gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" --json isDraft --jq .isDraft)"
+          if [[ "$is_draft" != "true" ]]; then
+            echo "$RELEASE_TAG must identify a draft release" >&2
+            exit 1
+          fi
+          gh release download "$RELEASE_TAG" \
             --repo "${{ github.repository }}" \
             --pattern '*.vsix' --pattern '*.vsix.sha256'
           ls -la ./*.vsix ./*.vsix.sha256
@@ -111,7 +142,7 @@ jobs:
           {
             echo "## Published"
             echo
-            echo "- Tag: \`${{ inputs.tag }}\`"
+            echo "- Tag: \`$RELEASE_TAG\`"
             echo "- Listing: https://marketplace.visualstudio.com/items?itemName=nao7sep.repofocus"
             echo
             echo "The GitHub release is still a **draft** — publishing it there is a separate, manual step."
