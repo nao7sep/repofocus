@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { GitRepository } from '../src/gitApi';
 import {
-  defaultTotalProbeTimeoutMilliseconds,
+  DEFAULT_SELECTION_TIMEOUT_MILLISECONDS,
+  DEFAULT_TOTAL_PROBE_TIMEOUT_MILLISECONDS,
   mapVisibilityCommandsInOrder,
   VisibilityProbeError,
   VisibilityProbeInterruptedError,
@@ -20,6 +21,7 @@ function nativeWorld(
   names: readonly string[],
   commandOrder = names,
   selectedAtStart = commandOrder[0],
+  selectionDelayMilliseconds = 0,
 ) {
   const visible = new Set(names);
   let selectedName: string | undefined = selectedAtStart;
@@ -33,7 +35,12 @@ function nativeWorld(
       if (!target) throw new Error(`Unknown command: ${command}`);
       visible.delete(target);
       if (selectedName === target) {
-        selectedName = commandOrder.find(name => visible.has(name));
+        const next = commandOrder.find(name => visible.has(name));
+        if (selectionDelayMilliseconds > 0) {
+          setTimeout(() => { selectedName = next; }, selectionDelayMilliseconds);
+        } else {
+          selectedName = next;
+        }
       }
     },
     reveal: async command => {
@@ -59,10 +66,28 @@ const fastTimings = {
 } as const;
 
 describe('mapVisibilityCommandsInOrder', () => {
-  it('allows slow Windows hosts more time without changing other platforms', () => {
-    expect(defaultTotalProbeTimeoutMilliseconds('win32')).toBe(120_000);
-    expect(defaultTotalProbeTimeoutMilliseconds('darwin')).toBe(60_000);
-    expect(defaultTotalProbeTimeoutMilliseconds('linux')).toBe(60_000);
+  it('uses host-independent probe timeouts', () => {
+    expect(DEFAULT_SELECTION_TIMEOUT_MILLISECONDS).toBe(10_000);
+    expect(DEFAULT_TOTAL_PROBE_TIMEOUT_MILLISECONDS).toBe(120_000);
+  });
+
+  it('allows a slow native focus transfer to settle', async () => {
+    vi.useFakeTimers();
+    try {
+      const names = ['alpha', 'beta'];
+      const world = nativeWorld(names, names, 'beta', 5_000);
+      const mapping = mapVisibilityCommandsInOrder(
+        world.repositories,
+        world.commands,
+        world.ledger,
+      );
+      const result = expect(mapping).resolves.toHaveLength(2);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await result;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each([2, 3, 50])('maps %i repositories with exactly 3N - 3 bounded toggles', async count => {
