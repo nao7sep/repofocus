@@ -32,7 +32,11 @@ jobs:
   # verification failure is unambiguous — it cannot be confused with a packaging
   # fault, and no artifact exists to be mistaken for a releasable one.
   verify:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Check out source
         uses: actions/checkout@v6
@@ -55,8 +59,13 @@ jobs:
       # The Extension Host tests need a display; xvfb provides one on the runner.
       # This covers both workspace shapes — one folder holding many repositories,
       # and a multi-root workspace of repositories from unrelated directories.
-      - name: Extension Host integration tests
+      - name: Extension Host integration tests (Linux)
+        if: runner.os == 'Linux'
         run: xvfb-run -a npm run test:integration
+
+      - name: Extension Host integration tests (Windows)
+        if: runner.os == 'Windows'
+        run: npm run test:integration
 
   package:
     needs: verify
