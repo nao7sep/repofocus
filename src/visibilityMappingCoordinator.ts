@@ -38,6 +38,7 @@ export interface VisibilityMappingCoordinatorOptions {
   readonly commandRetryAttempts?: number;
   readonly commandRetryMilliseconds?: number;
   readonly commandRetryTimeoutMilliseconds?: number;
+  readonly commandUnavailableRetryMilliseconds?: number;
   readonly topologySettleMilliseconds?: number;
 }
 
@@ -56,6 +57,7 @@ export class VisibilityMappingCoordinator {
   private hasBaseline = false;
   private unavailableReason: VisibilityUnavailableReason | undefined;
   private reportedReason: VisibilityUnavailableReason | undefined;
+  private commandRegistrationRetry: ReturnType<typeof setTimeout> | undefined;
   private filteringRequested: boolean;
   private readonly commandEnumeration = new NonOverlappingHostOperation<readonly string[]>();
 
@@ -75,6 +77,10 @@ export class VisibilityMappingCoordinator {
 
   requestRefresh(): void {
     if (this.disposed || !this.options.reconciler.compatible) return;
+    if (this.commandRegistrationRetry) {
+      clearTimeout(this.commandRegistrationRetry);
+      this.commandRegistrationRetry = undefined;
+    }
     this.revision += 1;
     this.requestedAt = Date.now();
     this.hasBaseline = false;
@@ -112,6 +118,8 @@ export class VisibilityMappingCoordinator {
     if (this.disposed) return;
     this.disposed = true;
     this.revision += 1;
+    if (this.commandRegistrationRetry) clearTimeout(this.commandRegistrationRetry);
+    this.commandRegistrationRetry = undefined;
   }
 
   private shouldFilter(repositories = this.options.getRepositories()): boolean {
@@ -143,6 +151,19 @@ export class VisibilityMappingCoordinator {
     this.reportUnavailable(reason);
     await this.options.reconciler.setFilteringEnabled(false);
     await this.options.reconciler.resume();
+    if (reason === 'awaiting-native-commands') this.scheduleCommandRegistrationRetry();
+  }
+
+  private scheduleCommandRegistrationRetry(): void {
+    if (this.commandRegistrationRetry || this.disposed) return;
+    const milliseconds = this.options.commandUnavailableRetryMilliseconds ?? 1_000;
+    if (!Number.isSafeInteger(milliseconds) || milliseconds < 1) {
+      throw new Error('Unavailable command retry delay must be a positive safe integer.');
+    }
+    this.commandRegistrationRetry = setTimeout(() => {
+      this.commandRegistrationRetry = undefined;
+      if (this.mappingState === 'awaiting-native-commands') this.requestRefresh();
+    }, milliseconds);
   }
 
   private async refreshOnce(revision: number): Promise<void> {
@@ -213,7 +234,9 @@ export class VisibilityMappingCoordinator {
     repositoryCount: number,
     revision: number,
   ): Promise<readonly string[] | undefined> {
-    const attempts = this.options.commandRetryAttempts ?? 100;
+    const attempts = this.unavailableReason === 'awaiting-native-commands'
+      ? 1
+      : this.options.commandRetryAttempts ?? 100;
     const retryMilliseconds = this.options.commandRetryMilliseconds ?? 50;
     const timeoutMilliseconds = this.options.commandRetryTimeoutMilliseconds
       ?? DEFAULT_COMMAND_REGISTRATION_TIMEOUT_MILLISECONDS;

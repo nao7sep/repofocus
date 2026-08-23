@@ -57,15 +57,15 @@ export async function run(): Promise<void> {
 
   const extension = vscode.extensions.getExtension<RepoFocusExtensionApi>(extensionId);
   assert(extension, `${extensionId} must be installed in the Extension Host.`);
-  assert.equal(extension.isActive, false, 'RepoFocus must wait for Source Control to open.');
-
-  // Opening Source Control represents the user's pane choice, and RepoFocus can
-  // map nothing until the native view registers its commands.
-  await vscode.commands.executeCommand('workbench.view.scm');
   const api = await waitFor(
-    'RepoFocus activation after Source Control opens',
+    'RepoFocus activation after VS Code startup',
     () => extension.isActive ? extension.exports : undefined,
+    120_000,
   );
+
+  // RepoFocus starts without changing the user's pane, then initializes when
+  // the native view registers its commands.
+  await vscode.commands.executeCommand('workbench.view.scm');
 
   // The shape itself: VS Code must actually be in a multi-root workspace, or the
   // asRelativePath default under test never engages and the run proves nothing.

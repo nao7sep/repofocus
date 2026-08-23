@@ -18,7 +18,7 @@ code --install-extension nao7sep.repofocus
 
 Every release also attaches a `.vsix` and SHA-256 digest to [GitHub Releases](https://github.com/nao7sep/repofocus/releases/latest). Install one with **Extensions → … → Install from VSIX…**.
 
-Filtering turns on when you first open Source Control. Use **RepoFocus: Toggle Filtering** from the Command Palette or the filter button in the Source Control title bar to disable it for the current workspace until you turn it back on.
+Filtering turns on automatically after VS Code starts, whether Source Control is already open or you open it later. Use **RepoFocus: Toggle Filtering** from the Command Palette or the filter button in the Source Control title bar to disable it for the current workspace until you turn it back on.
 
 ## Requirements
 
@@ -33,9 +33,9 @@ To build from source, use Node.js 22 or newer and npm.
 
 ## Compatibility and safety
 
-VS Code does not expose repository visibility through its public extension API, so RepoFocus uses bounded built-in Source Control commands. It activates when Source Control opens, its view command runs, or you invoke a RepoFocus command. Initialization waits for the built-in Git scan, makes every provider visible, and maps opaque visibility commands in linear work: `3N−3` reversible toggles for `N` repositories, plus the final filter. The release test exercises 50 repositories opened in scrambled order.
+VS Code does not expose repository visibility through its public extension API, so RepoFocus uses bounded built-in Source Control commands. It activates after VS Code finishes starting. Initialization waits for the built-in Git scan, makes every provider visible, and maps opaque visibility commands in linear work: `3N−3` reversible toggles for `N` repositories, plus the final filter. The release test exercises 50 repositories opened in scrambled order.
 
-Built-in Git activation has a 10-second bound, every native command has a 10-second bound, and the complete mapping has a 60-second bound. Lazy command registration gets one five-second overall deadline, including host-call time and retry spacing. There are no polling loops, periodic audits, background fetches, or window-focus jobs. Normal Git-state events only schedule visibility work when a repository changes between clean and actionable.
+Built-in Git activation has a 10-second bound, every native command has a 10-second bound, and complete mapping has a 120-second bound on Windows and a 60-second bound elsewhere. Lazy command registration gets one five-second overall deadline, including host-call time and retry spacing; while Source Control remains unopened, a slow bounded registry check continues until its native commands appear. There are no periodic repository audits, background fetches, or window-focus jobs. Normal Git-state events only schedule visibility work when a repository changes between clean and actionable.
 
 If VS Code's internal behavior does not match the validated contract, RepoFocus stops filtering. It restores confirmed hides through their known command ledger. A rejected toggle has an ambiguous outcome, so RepoFocus never retries that inversion: it waits for the native command to settle, re-establishes the all-visible selection-mode baseline, and remains stopped. If the native command never settles, RepoFocus reports that visibility is unknown instead of issuing more toggles. It never closes a repository. An unavailable or inconsistent Git state is treated as actionable so uncertainty remains visible.
 

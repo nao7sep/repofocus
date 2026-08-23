@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { GitRepository } from '../src/gitApi';
 import {
+  defaultTotalProbeTimeoutMilliseconds,
   mapVisibilityCommandsInOrder,
   VisibilityProbeError,
   VisibilityProbeInterruptedError,
@@ -58,6 +59,12 @@ const fastTimings = {
 } as const;
 
 describe('mapVisibilityCommandsInOrder', () => {
+  it('allows slow Windows hosts more time without changing other platforms', () => {
+    expect(defaultTotalProbeTimeoutMilliseconds('win32')).toBe(120_000);
+    expect(defaultTotalProbeTimeoutMilliseconds('darwin')).toBe(60_000);
+    expect(defaultTotalProbeTimeoutMilliseconds('linux')).toBe(60_000);
+  });
+
   it.each([2, 3, 50])('maps %i repositories with exactly 3N - 3 bounded toggles', async count => {
     const names = Array.from({ length: count }, (_, index) => `repo-${index}`);
     const world = nativeWorld(names);

@@ -45,7 +45,7 @@ export async function run(): Promise<void> {
   assert(fixtureRoot, 'REPOFOCUS_INTEGRATION_ROOT must identify the integration workspace.');
   assert(updaterPath, 'REPOFOCUS_INTEGRATION_UPDATER must identify the upstream fixture clone.');
   const expectedRepositoryCount = Number(process.env.REPOFOCUS_INTEGRATION_REPOSITORY_COUNT ?? '2');
-  const initialFilteringTimeoutMilliseconds = process.platform === 'win32' ? 60_000 : 15_000;
+  const initialFilteringTimeoutMilliseconds = process.platform === 'win32' ? 120_000 : 15_000;
   await vscode.commands.executeCommand('workbench.view.explorer');
   await vscode.workspace.getConfiguration('git').update(
     'autofetch',
@@ -69,19 +69,15 @@ export async function run(): Promise<void> {
   }
   const extension = vscode.extensions.getExtension<RepoFocusExtensionApi>(extensionId);
   assert(extension, `Extension ${extensionId} was not loaded.`);
-  assert.equal(
-    extension.isActive,
-    false,
-    'RepoFocus must remain inactive until the user opens Source Control.',
+  const api = await waitFor(
+    'RepoFocus activation after VS Code startup',
+    () => extension.isActive ? extension.exports : undefined,
+    120_000,
   );
 
-  // Opening Source Control here represents the user's pane choice. RepoFocus
-  // must not issue this command itself.
+  // RepoFocus starts without changing the user's pane. Opening Source Control
+  // later must let its bounded command-registration retry initialize filtering.
   await vscode.commands.executeCommand('workbench.view.scm');
-  const api = await waitFor(
-    'RepoFocus activation after Source Control opens',
-    () => extension.isActive ? extension.exports : undefined,
-  );
 
   try {
     await waitFor('all Git repositories', () =>

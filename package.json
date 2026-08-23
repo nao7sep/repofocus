@@ -31,6 +31,7 @@
     "workspace"
   ],
   "activationEvents": [
+    "onStartupFinished",
     "onView:workbench.scm",
     "onCommand:workbench.view.scm"
   ],

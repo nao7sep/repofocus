@@ -34,7 +34,10 @@ export interface VisibilityProbeTimings {
 }
 
 export const DEFAULT_SELECTION_TIMEOUT_MILLISECONDS = 1_000;
-export const DEFAULT_TOTAL_PROBE_TIMEOUT_MILLISECONDS = 60_000;
+export function defaultTotalProbeTimeoutMilliseconds(platform = process.platform): number {
+  return platform === 'win32' ? 120_000 : 60_000;
+}
+export const DEFAULT_TOTAL_PROBE_TIMEOUT_MILLISECONDS = defaultTotalProbeTimeoutMilliseconds();
 
 function selectedRepository(repositories: readonly GitRepository[]): GitRepository | undefined {
   const selected = repositories.filter(repository => repository.ui.selected);

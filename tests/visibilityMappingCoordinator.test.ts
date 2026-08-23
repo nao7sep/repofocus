@@ -145,7 +145,7 @@ describe('VisibilityMappingCoordinator', () => {
     expect(coordinator.baselineEstablished).toBe(true);
   });
 
-  it('bounds lazy command-registration retries and requires an event or manual refresh afterward', async () => {
+  it('bounds the initial command-registration wait and then retries slowly until ready', async () => {
     const native = nativeRepositories(['alpha', 'beta']);
     let commandsReady = false;
     const getCommands = vi.fn(() => Promise.resolve(commandsReady
@@ -162,6 +162,7 @@ describe('VisibilityMappingCoordinator', () => {
       reconciler,
       commandRetryAttempts: 3,
       commandRetryMilliseconds: 0,
+      commandUnavailableRetryMilliseconds: 1,
       topologySettleMilliseconds: 0,
     });
 
@@ -170,12 +171,8 @@ describe('VisibilityMappingCoordinator', () => {
     expect(getCommands).toHaveBeenCalledTimes(3);
     expect(coordinator.mappingState).toBe('awaiting-native-commands');
 
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(getCommands).toHaveBeenCalledTimes(3);
-
     commandsReady = true;
-    coordinator.retryIfUnavailable();
+    await new Promise(resolve => setTimeout(resolve, 5));
     await coordinator.waitForIdle();
     expect(coordinator.baselineEstablished).toBe(true);
     expect(getCommands).toHaveBeenCalledTimes(4);
