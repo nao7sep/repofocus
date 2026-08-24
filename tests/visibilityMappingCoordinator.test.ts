@@ -182,9 +182,10 @@ describe('VisibilityMappingCoordinator', () => {
     expect(getCommands).toHaveBeenCalledTimes(4);
   });
 
-  it('enforces one overall command-enumeration deadline without overlapping a stalled host call', async () => {
+  it('recovers after a command-enumeration timeout without overlapping the stalled host call', async () => {
     const native = nativeRepositories(['alpha', 'beta']);
-    const gate = new Promise<readonly string[]>(() => {});
+    let resolveCommands!: (commands: readonly string[]) => void;
+    const gate = new Promise<readonly string[]>(resolve => { resolveCommands = resolve; });
     const getCommands = vi.fn(() => gate);
     const onError = vi.fn();
     const reconciler = new VisibilityReconciler({ toggle: native.execute, onError });
@@ -196,6 +197,7 @@ describe('VisibilityMappingCoordinator', () => {
       resetNativeVisibility: native.reset,
       reconciler,
       commandRetryTimeoutMilliseconds: 10,
+      commandUnavailableRetryMilliseconds: 1,
       topologySettleMilliseconds: 0,
     });
 
@@ -203,8 +205,19 @@ describe('VisibilityMappingCoordinator', () => {
     await coordinator.waitForIdle();
 
     expect(getCommands).toHaveBeenCalledOnce();
-    expect(reconciler.compatible).toBe(false);
-    expect((onError.mock.calls[0][0] as Error).message).toContain('command enumeration');
+    expect(coordinator.mappingState).toBe('awaiting-native-commands');
+    expect(reconciler.compatible).toBe(true);
+    expect(onError).not.toHaveBeenCalled();
+
+    // Let the scheduled retry attach to the still-running operation, then
+    // settle that original call. No rival getCommands() invocation is started.
+    await new Promise(resolve => setTimeout(resolve, 5));
+    resolveCommands(native.discoveryCommands);
+    await coordinator.waitForIdle();
+
+    expect(coordinator.baselineEstablished).toBe(true);
+    expect(getCommands).toHaveBeenCalledOnce();
+    expect(onError).not.toHaveBeenCalled();
   });
 
   it('discards command enumeration that settles after its topology revision becomes stale', async () => {

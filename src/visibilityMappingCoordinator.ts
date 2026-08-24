@@ -185,6 +185,10 @@ export class VisibilityMappingCoordinator {
     try {
       commands = await this.resolveSettledCommands(repositories.length, revision);
     } catch (error) {
+      if (error instanceof HostOperationTimeoutError) {
+        await this.standDown('awaiting-native-commands', revision);
+        return;
+      }
       if (error instanceof OtherScmProvidersError) {
         await this.standDown('other-scm-providers', revision);
         return;
