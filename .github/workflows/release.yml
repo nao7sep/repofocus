@@ -53,7 +53,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Check (typecheck, lint, unit tests)
+      - name: Check (typecheck and unit tests)
         run: npm run check
 
       - name: Coverage
@@ -64,6 +64,12 @@ jobs:
       # and a multi-root workspace of repositories from unrelated directories.
       - name: Extension Host integration tests (Linux)
         if: runner.os == 'Linux'
+        run: xvfb-run -a npm run test:integration
+
+      - name: Extension Host integration tests (latest stable, Linux)
+        if: runner.os == 'Linux'
+        env:
+          REPOFOCUS_INTEGRATION_VSCODE_VERSION: stable
         run: xvfb-run -a npm run test:integration
 
       - name: Extension Host integration tests (Windows)

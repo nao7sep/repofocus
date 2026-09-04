@@ -18,9 +18,11 @@ const multiRootRoot = await mkdtemp(join(tmpdir(), 'repofocus-multiroot-'));
 const multiRootFirst = join(multiRootRoot, 'first-parent');
 const multiRootSecond = join(multiRootRoot, 'second-parent');
 const configuredVscodeExecutablePath = process.env.VSCODE_EXECUTABLE_PATH;
+const configuredVscodeVersion = process.env.REPOFOCUS_INTEGRATION_VSCODE_VERSION;
 const localVscodeExecutablePath = '/Applications/Visual Studio Code.app/Contents/MacOS/Code';
 const vscodeExecutablePath = configuredVscodeExecutablePath
   ?? (existsSync(localVscodeExecutablePath) ? localVscodeExecutablePath : undefined);
+const vscodeVersion = configuredVscodeVersion ?? '1.131.0';
 const repositoryCount = Number(process.env.REPOFOCUS_INTEGRATION_REPOSITORY_COUNT ?? '50');
 
 if (!Number.isSafeInteger(repositoryCount) || repositoryCount < 2) {
@@ -65,7 +67,7 @@ try {
   git(alphaUpdaterPath, 'config', 'user.email', 'repofocus-tests@example.invalid');
 
   await runTests({
-    ...(vscodeExecutablePath ? { vscodeExecutablePath } : { version: '1.131.0' }),
+    ...(vscodeExecutablePath ? { vscodeExecutablePath } : { version: vscodeVersion }),
     extensionDevelopmentPath,
     extensionTestsPath: join(projectRoot, 'dist-tests', 'integration.js'),
     extensionTestsEnv: {
@@ -98,7 +100,7 @@ try {
   );
 
   await runTests({
-    ...(vscodeExecutablePath ? { vscodeExecutablePath } : { version: '1.131.0' }),
+    ...(vscodeExecutablePath ? { vscodeExecutablePath } : { version: vscodeVersion }),
     extensionDevelopmentPath,
     extensionTestsPath: join(projectRoot, 'dist-tests', 'multiRoot.js'),
     extensionTestsEnv: {
