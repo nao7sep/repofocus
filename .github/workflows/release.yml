@@ -53,11 +53,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Verify tag matches package version
+        if: github.ref_type == 'tag'
+        run: npm run check:release-tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+
       - name: Check (typecheck and unit tests)
         run: npm run check
-
-      - name: Coverage
-        run: npm run test:coverage
 
       # The Extension Host tests need a display; xvfb provides one on the runner.
       # This covers both workspace shapes — one folder holding many repositories,

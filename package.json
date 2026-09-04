@@ -107,6 +107,7 @@
     "test:coverage": "vitest run --coverage",
     "test:integration": "npm run build && node scripts/run-integration-tests.mjs",
     "check": "npm run typecheck && npm test",
+    "check:release-tag": "node scripts/check-release-tag.mjs",
     "vscode:prepublish": "npm run check && npm run build"
   },
   "dependencies": {
