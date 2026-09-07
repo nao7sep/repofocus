@@ -12,6 +12,7 @@ describe('packaged legal resources', () => {
     expect(manifest.license).toBe('SEE LICENSE IN LICENSE');
     expect(license).toContain('GNU GENERAL PUBLIC LICENSE');
     expect(license).toContain('Version 3, 29 June 2007');
+    expect(license).toContain('either version 3 of the License, or (at your option) any later');
     expect(license).toContain('Additional permission under GNU GPL version 3 section 7');
     expect(license).toContain('Microsoft Visual Studio Code');
     expect(license).toContain('vscode.git');
