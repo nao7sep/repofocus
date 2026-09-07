@@ -77,7 +77,7 @@ Install dependencies with `npm install`. `npm run check` runs the type and unit-
 
 ## License
 
-MIT © 2026 Yoshinao Inoguchi
+[GNU GPL v3 or later, with a narrow VS Code host exception](LICENSE) © 2026 Yoshinao Inoguchi
 
 ## Contact
 
