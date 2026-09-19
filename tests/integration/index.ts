@@ -7,7 +7,7 @@ import type { GitRepository } from '../../src/gitApi';
 import type { RepoFocusExtensionApi } from '../../src/extension';
 
 const extensionId = 'nao7sep.repofocus';
-const defaultWaitTimeoutMilliseconds = process.platform === 'win32' ? 60_000 : 15_000;
+const defaultWaitTimeoutMilliseconds = 15_000;
 
 async function waitFor<T>(
   description: string,
@@ -45,7 +45,7 @@ export async function run(): Promise<void> {
   assert(fixtureRoot, 'REPOFOCUS_INTEGRATION_ROOT must identify the integration workspace.');
   assert(updaterPath, 'REPOFOCUS_INTEGRATION_UPDATER must identify the upstream fixture clone.');
   const expectedRepositoryCount = Number(process.env.REPOFOCUS_INTEGRATION_REPOSITORY_COUNT ?? '2');
-  const initialFilteringTimeoutMilliseconds = process.platform === 'win32' ? 180_000 : 15_000;
+  const initialFilteringTimeoutMilliseconds = 15_000;
   await vscode.commands.executeCommand('workbench.view.explorer');
   await vscode.workspace.getConfiguration('git').update(
     'autofetch',

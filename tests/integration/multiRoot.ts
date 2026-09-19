@@ -23,7 +23,7 @@ import type { GitRepository } from '../../src/gitApi';
 import type { RepoFocusExtensionApi } from '../../src/extension';
 
 const extensionId = 'nao7sep.repofocus';
-const defaultWaitTimeoutMilliseconds = process.platform === 'win32' ? 60_000 : 15_000;
+const defaultWaitTimeoutMilliseconds = 15_000;
 
 async function waitFor<T>(
   description: string,
