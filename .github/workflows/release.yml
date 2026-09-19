@@ -59,8 +59,8 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_name }}
 
-      - name: Check (typecheck and unit tests)
-        run: npm run check
+      - name: Test (typecheck and unit tests)
+        run: npm test
 
       # The Extension Host tests need a display; xvfb provides one on the runner.
       # This covers both workspace shapes — one folder holding many repositories,
@@ -104,8 +104,8 @@ jobs:
       # never a rebuild, since two `vsce package` runs are not byte-identical and a
       # digest would then describe an artifact nobody inspected.
       #
-      # `vsce package` runs `vscode:prepublish` (npm run check && npm run build), so
-      # the checks run again here. That repetition is deliberate: it is the gate ON
+      # `vsce package` runs `vscode:prepublish` (npm test && npm run build), so
+      # the tests run again here. That repetition is deliberate: it is the gate ON
       # THE SHIPPING PATH, the one that would still fire if this workflow were
       # bypassed and someone packaged by hand.
       - name: Package VSIX

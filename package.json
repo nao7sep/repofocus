@@ -103,13 +103,12 @@
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
-    "test": "vitest run",
+    "test": "npm run typecheck && vitest run",
     "test:coverage": "vitest run --coverage",
     "test:integration": "npm run build && node scripts/run-integration-tests.mjs",
-    "check": "npm run typecheck && npm test",
-    "check:full": "npm run check && npm run test:integration",
+    "test:full": "npm test && npm run test:integration",
     "check:release-tag": "node scripts/check-release-tag.mjs",
-    "vscode:prepublish": "npm run check && npm run build"
+    "vscode:prepublish": "npm test && npm run build"
   },
   "dependencies": {
     "minimatch": "10.2.6"

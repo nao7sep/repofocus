@@ -73,7 +73,7 @@ Disabling or uninstalling RepoFocus restores every confirmed hide it owns. If a 
 
 ## Development
 
-Install dependencies with `npm install`. `npm run check` runs the type and unit-test gate; `npm run test:integration` builds the extension and exercises its supported workspace shapes in a real VS Code Extension Host. `npm run vscode:prepublish` runs the shipping-path check and production build.
+Install dependencies with `npm install`. `npm test` runs the type and unit-test gate; `npm run test:integration` builds the extension and exercises its supported workspace shapes in a real VS Code Extension Host. `npm run vscode:prepublish` runs the shipping-path check and production build.
 
 ## License
 
