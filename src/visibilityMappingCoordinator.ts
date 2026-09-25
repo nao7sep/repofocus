@@ -92,22 +92,21 @@ export class VisibilityMappingCoordinator {
     if (this.mappingState !== 'mapped') this.requestRefresh();
   }
 
+  /**
+   * Records the requested filtering state and applies it at once when a
+   * mapping baseline already exists. Without one, the request is recorded and
+   * a mapping run is (re)started if none is under way; the pending or running
+   * probe applies the live request as its own final step, so a caller never
+   * waits on the probe's bounded-but-long timeout to see its toggle take
+   * effect on the command surface.
+   */
   async updateFiltering(enabled = this.options.filteringRequested()): Promise<void> {
     this.filteringRequested = enabled;
-    const shouldFilter = this.shouldFilter();
-    if (!shouldFilter) {
-      await this.options.reconciler.setFilteringEnabled(false);
-      await this.waitForIdle();
-      await this.options.reconciler.resume();
-      await this.options.reconciler.waitForIdle();
-      return;
-    }
     if (this.hasBaseline) {
-      await this.options.reconciler.setFilteringEnabled(true);
+      await this.options.reconciler.setFilteringEnabled(this.shouldFilter());
       return;
     }
-    this.requestRefresh();
-    await this.waitForIdle();
+    if (!this.run) this.requestRefresh();
   }
 
   async waitForIdle(): Promise<void> {

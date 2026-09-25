@@ -311,6 +311,44 @@ describe('VisibilityMappingCoordinator', () => {
     expect(resetNativeVisibility).toHaveBeenCalledOnce();
   });
 
+  it('returns from updateFiltering at once while a mapping probe is still in flight', async () => {
+    const native = nativeRepositories(['alpha', 'beta']);
+    let resolveCommands!: (commands: readonly string[]) => void;
+    const gate = new Promise<readonly string[]>(resolve => { resolveCommands = resolve; });
+    const getCommands = vi.fn(() => gate);
+    const execute = vi.fn(native.execute);
+    const resetNativeVisibility = vi.fn(native.reset);
+    const reconciler = new VisibilityReconciler({ toggle: execute });
+    for (const repository of native.repositories) reconciler.setActionability(repository, clean);
+    let filteringRequested = true;
+    const coordinator = new VisibilityMappingCoordinator({
+      filteringRequested: () => filteringRequested,
+      getCommands,
+      getRepositories: () => native.repositories,
+      topologyReady: () => true,
+      resetNativeVisibility,
+      reconciler,
+      topologySettleMilliseconds: 0,
+    });
+
+    coordinator.requestRefresh();
+    await new Promise(resolve => setTimeout(resolve, 5));
+    expect(getCommands).toHaveBeenCalled();
+    expect(coordinator.baselineEstablished).toBe(false);
+
+    filteringRequested = false;
+    let settled = false;
+    void coordinator.updateFiltering(false).then(() => { settled = true; });
+    await new Promise(resolve => setTimeout(resolve, 5));
+    expect(settled).toBe(true);
+    expect(coordinator.baselineEstablished).toBe(false);
+
+    resolveCommands(native.discoveryCommands);
+    await coordinator.waitForIdle();
+    expect(coordinator.baselineEstablished).toBe(true);
+    expect(reconciler.enabled).toBe(false);
+  });
+
   it('stands down recoverably when another SCM provider is present', async () => {
     const native = nativeRepositories(['alpha', 'beta']);
     const onError = vi.fn();
