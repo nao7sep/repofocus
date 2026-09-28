@@ -1,6 +1,6 @@
 # RepoFocus
 
-RepoFocus keeps VS Code's native Source Control view focused on Git repositories that need attention. Clean repositories disappear; repositories with conflicts, local changes, untracked files, an active rebase, commits to push or pull, or an unpublished branch remain visible. Selected repository names or paths can also stay visible through one `alwaysShow` setting.
+Show only the Git repositories that need attention in VS Code's Source Control view. Clean repositories disappear; repositories with conflicts, local changes, untracked files, an active rebase, commits to push or pull, or an unpublished branch remain visible. Selected repository names or paths can also stay visible through one `alwaysShow` setting.
 
 It filters the Source Control view you already use rather than replacing it with a dashboard. Hidden repositories remain open and monitored by VS Code's built-in Git extension, so a local edit or Git-state update makes an actionable repository reappear with its normal commit box, change groups, and commands.
 
