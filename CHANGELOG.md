@@ -9,21 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- RepoFocus now activates automatically after VS Code starts, including when Source Control was
-  already open, without changing the selected pane.
-- Release verification now exercises the Extension Host integration scenarios on both Windows
-  and Linux.
+- RepoFocus now activates automatically after VS Code starts, including when Source Control was already open, without changing the selected pane.
+- Release verification now exercises the Extension Host integration scenarios on both Windows and Linux.
 
 ### Fixed
 
-- Allowed repository-focus transitions up to 10 seconds and complete visibility mapping up to
-  120 seconds, so slow machines can settle without a false compatibility failure.
-- Made slow command-registry reads pause and recover without starting overlapping host calls or
-  requiring a window reload.
-- Made filtering toggles transactional across native visibility, workspace state, and VS Code
-  context, with rollback and explicit recovery errors when a host update fails.
-- Made malformed synced or hand-edited `alwaysShow` settings fail visible instead of compiling
-  unbounded input or hiding uncertain repositories.
+- Allowed repository-focus transitions up to 10 seconds and complete visibility mapping up to 120 seconds, so slow machines can settle without a false compatibility failure.
+- Made slow command-registry reads pause and recover without starting overlapping host calls or requiring a window reload.
+- Made filtering toggles transactional across native visibility, workspace state, and VS Code context, with rollback and explicit recovery errors when a host update fails.
+- Made malformed synced or hand-edited `alwaysShow` settings fail visible instead of compiling unbounded input or hiding uncertain repositories.
 
 ## [0.1.2] - 2026-08-22
 
