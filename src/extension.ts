@@ -54,9 +54,23 @@ async function activateGit(): Promise<GitApi> {
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<RepoFocusExtensionApi> {
-  const git = await activateGit();
   const output = vscode.window.createOutputChannel('RepoFocus');
+  context.subscriptions.push(output);
   const logger = new Logger(output, context.extensionMode === vscode.ExtensionMode.Development);
+  try {
+    return await start(context, output, logger);
+  } catch (error) {
+    logger.error('RepoFocus activation failed.', error);
+    throw error;
+  }
+}
+
+async function start(
+  context: vscode.ExtensionContext,
+  output: vscode.OutputChannel,
+  logger: Logger,
+): Promise<RepoFocusExtensionApi> {
+  const git = await activateGit();
   const nativeVisibilityCommands = new NativeVisibilityCommandExecutor({
     execute: async command => {
       await vscode.commands.executeCommand(command);
@@ -64,7 +78,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
   });
   const manifest = context.extension.packageJSON as { version?: unknown };
   const extensionVersion = typeof manifest.version === 'string' ? manifest.version : 'unknown';
-  context.subscriptions.push(output);
 
   const actionability = new Map<string, RepositoryActionability>();
   let alwaysShow = readAlwaysShowConfiguration();
