@@ -129,11 +129,19 @@ async function start(
   });
 
   const initialFilteringEnabled = context.workspaceState.get(filteringStateKey, true);
-  await vscode.commands.executeCommand('setContext', 'repofocus.compatible', true);
-  await vscode.commands.executeCommand(
-    'setContext',
-    'repofocus.filteringEnabled',
-    initialFilteringEnabled,
+  await waitForHostOperation(
+    Promise.resolve(vscode.commands.executeCommand('setContext', 'repofocus.compatible', true)),
+    hostWriteTimeoutMilliseconds,
+    'Compatibility context update',
+  );
+  await waitForHostOperation(
+    Promise.resolve(vscode.commands.executeCommand(
+      'setContext',
+      'repofocus.filteringEnabled',
+      initialFilteringEnabled,
+    )),
+    hostWriteTimeoutMilliseconds,
+    'Filtering context update',
   );
 
   let monitor: GitRepositoryMonitor;
