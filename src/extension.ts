@@ -114,13 +114,18 @@ async function start(
         'Copy Diagnostics',
         'Open Documentation',
         'Show Output',
-      ).then(selection => {
+      ).then(async selection => {
         if (selection === 'Copy Diagnostics') {
           void vscode.commands.executeCommand('repofocus.copyDiagnostics');
         } else if (selection === 'Open Documentation') {
-          void vscode.env.openExternal(vscode.Uri.parse(
-            'https://github.com/nao7sep/repofocus#compatibility-and-safety',
-          ));
+          try {
+            await vscode.env.openExternal(vscode.Uri.parse(
+              'https://github.com/nao7sep/repofocus#compatibility-and-safety',
+            ));
+          } catch (openError) {
+            logger.error('Opening the documentation failed.', openError);
+            void vscode.window.showErrorMessage(describeFailure('open-documentation', openError));
+          }
         } else if (selection === 'Show Output') {
           output.show(true);
         }

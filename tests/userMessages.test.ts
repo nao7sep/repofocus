@@ -25,6 +25,7 @@ describe('describeFailure', () => {
   it.each<FailedOperation>([
     'compatibility',
     'copy-diagnostics',
+    'open-documentation',
     'toggle',
   ])('shows only authored copy for %s', operation => {
     const message = describeFailure(operation, hostileError());
@@ -40,6 +41,11 @@ describe('describeFailure', () => {
   it('names the clipboard when diagnostics cannot be copied', () => {
     expect(describeFailure('copy-diagnostics', hostileError()))
       .toBe('Couldn\'t copy the diagnostics to the clipboard.');
+  });
+
+  it('names the documentation when it cannot be opened', () => {
+    expect(describeFailure('open-documentation', hostileError()))
+      .toBe('Couldn\'t open the documentation.');
   });
 
   it('tells a restored toggle from an incomplete rollback by error type', () => {
