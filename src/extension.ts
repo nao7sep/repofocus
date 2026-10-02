@@ -8,7 +8,7 @@ import {
 } from './filteringStateTransaction';
 import type { GitApi, GitExtension, GitRepository } from './gitApi';
 import { GitRepositoryMonitor } from './gitRepositoryMonitor';
-import { OneShotHostOperation } from './hostOperation';
+import { OneShotHostOperation, waitForHostOperation } from './hostOperation';
 import { Logger } from './logger';
 import {
   NativeVisibilityCommandExecutor,
@@ -23,6 +23,7 @@ import { VisibilityReconciler } from './visibilityReconciler';
 const gitExtensionId = 'vscode.git';
 const filteringStateKey = 'repofocus.filteringEnabledByWorkspace';
 const gitActivationTimeoutMilliseconds = 10_000;
+const hostWriteTimeoutMilliseconds = 10_000;
 const gitActivation = new OneShotHostOperation<GitExtension['exports']>();
 
 export interface RepoFocusExtensionApi {
@@ -254,7 +255,11 @@ async function start(
       alwaysShowPatternCount: alwaysShow.patternCount,
     });
     try {
-      await vscode.env.clipboard.writeText(diagnostics);
+      await waitForHostOperation(
+        Promise.resolve(vscode.env.clipboard.writeText(diagnostics)),
+        hostWriteTimeoutMilliseconds,
+        'Diagnostics clipboard write',
+      );
     } catch (error) {
       logger.error('Copy diagnostics failed.', error);
       void vscode.window.showErrorMessage(describeFailure('copy-diagnostics', error));
@@ -272,9 +277,17 @@ async function start(
   const filteringState = new FilteringStateTransaction({
     initialValue: initialFilteringEnabled,
     applyNative: enabled => visibility.updateFiltering(enabled),
-    persist: enabled => context.workspaceState.update(filteringStateKey, enabled),
+    persist: enabled => waitForHostOperation(
+      Promise.resolve(context.workspaceState.update(filteringStateKey, enabled)),
+      hostWriteTimeoutMilliseconds,
+      'Filtering state persistence',
+    ),
     publishContext: async enabled => {
-      await vscode.commands.executeCommand('setContext', 'repofocus.filteringEnabled', enabled);
+      await waitForHostOperation(
+        Promise.resolve(vscode.commands.executeCommand('setContext', 'repofocus.filteringEnabled', enabled)),
+        hostWriteTimeoutMilliseconds,
+        'Filtering context update',
+      );
     },
   });
 

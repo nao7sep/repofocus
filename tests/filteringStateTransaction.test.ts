@@ -3,6 +3,7 @@ import {
   FilteringStateTransaction,
   FilteringStateTransitionError,
 } from '../src/filteringStateTransaction';
+import { waitForHostOperation } from '../src/hostOperation';
 
 describe('FilteringStateTransaction', () => {
   it('publishes runtime state only after native, durable, and context projections agree', async () => {
@@ -78,5 +79,30 @@ describe('FilteringStateTransaction', () => {
     expect(error).toBeInstanceOf(FilteringStateTransitionError);
     expect((error as FilteringStateTransitionError).rollbackErrors).toEqual([rollbackFailure]);
     expect(state.current).toBe(true);
+  });
+
+  it('lets a later toggle run when a bounded host write never settles', async () => {
+    vi.useFakeTimers();
+    try {
+      let hung = true;
+      const state = new FilteringStateTransaction({
+        initialValue: true,
+        applyNative: async () => {},
+        persist: () => {
+          if (!hung) return Promise.resolve();
+          hung = false;
+          return waitForHostOperation(new Promise<void>(() => {}), 1_000, 'Persistence');
+        },
+        publishContext: async () => {},
+      });
+
+      const first = expect(state.toggle()).rejects.toBeInstanceOf(FilteringStateTransitionError);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await first;
+      expect(state.current).toBe(true);
+      await expect(state.toggle()).resolves.toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
