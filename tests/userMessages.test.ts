@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { FilteringStateTransitionError } from '../src/filteringStateTransaction';
 import { describeFailure, describeMappingState, type FailedOperation } from '../src/userMessages';
 
 const sentinel = 'SENTINEL-7f3a';
@@ -21,7 +22,11 @@ function expectAuthored(message: string): void {
 }
 
 describe('describeFailure', () => {
-  it.each<FailedOperation>(['compatibility'])('shows only authored copy for %s', operation => {
+  it.each<FailedOperation>([
+    'compatibility',
+    'copy-diagnostics',
+    'toggle',
+  ])('shows only authored copy for %s', operation => {
     const message = describeFailure(operation, hostileError());
 
     expectAuthored(message);
@@ -30,5 +35,24 @@ describe('describeFailure', () => {
 
   it('reuses the incompatible mapping copy when filtering stops', () => {
     expect(describeFailure('compatibility', hostileError())).toBe(describeMappingState('incompatible'));
+  });
+
+  it('names the clipboard when diagnostics cannot be copied', () => {
+    expect(describeFailure('copy-diagnostics', hostileError()))
+      .toBe('Couldn\'t copy the diagnostics to the clipboard.');
+  });
+
+  it('tells a restored toggle from an incomplete rollback by error type', () => {
+    const restored = describeFailure('toggle', new FilteringStateTransitionError(hostileError(), []));
+    const incomplete = describeFailure(
+      'toggle',
+      new FilteringStateTransitionError(hostileError(), [hostileError()]),
+    );
+
+    expectAuthored(restored);
+    expectAuthored(incomplete);
+    expect(restored).toContain('restored the previous setting');
+    expect(incomplete).toContain('Reload the window');
+    expect(describeFailure('toggle', hostileError())).toBe(restored);
   });
 });

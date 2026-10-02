@@ -248,7 +248,8 @@ async function start(
       await vscode.env.clipboard.writeText(diagnostics);
     } catch (error) {
       logger.error('Copy diagnostics failed.', error);
-      throw error;
+      void vscode.window.showErrorMessage(describeFailure('copy-diagnostics', error));
+      return;
     }
     logger.info('Copy diagnostics completed.', { characterCount: diagnostics.length });
     void vscode.window.showInformationMessage('RepoFocus diagnostics copied to the clipboard.');
@@ -283,14 +284,7 @@ async function start(
             logger.error('Filtering state rollback failed.', rollbackError, { index });
           });
         }
-        const rollbackIncomplete = error instanceof FilteringStateTransitionError
-          && error.rollbackErrors.length > 0;
-        void vscode.window.showErrorMessage(
-          rollbackIncomplete
-            ? 'RepoFocus could not fully restore filtering after a host failure. Reload the window, then see RepoFocus output for details.'
-            : 'RepoFocus could not change filtering and restored the previous setting. See RepoFocus output for details.',
-        );
-        throw error;
+        void vscode.window.showErrorMessage(describeFailure('toggle', error));
       }
     }),
     vscode.commands.registerCommand('repofocus.refresh', async () => {

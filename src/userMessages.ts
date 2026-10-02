@@ -1,5 +1,7 @@
+import { FilteringStateTransitionError } from './filteringStateTransaction';
+
 /** The extension's presentation boundary, per the error-handling conventions. */
-export type FailedOperation = 'compatibility';
+export type FailedOperation = 'compatibility' | 'copy-diagnostics' | 'toggle';
 
 const incompatibleMessage = 'RepoFocus stopped filtering because VS Code\'s internal visibility '
   + 'contract changed. Reload the window after copying diagnostics.';
@@ -20,9 +22,17 @@ export function describeMappingState(state: string): string | undefined {
   }
 }
 
-export function describeFailure(operation: FailedOperation, _error: unknown): string {
+export function describeFailure(operation: FailedOperation, error: unknown): string {
   switch (operation) {
     case 'compatibility':
       return incompatibleMessage;
+    case 'copy-diagnostics':
+      return 'Couldn\'t copy the diagnostics to the clipboard.';
+    case 'toggle':
+      return error instanceof FilteringStateTransitionError && error.rollbackErrors.length > 0
+        ? 'RepoFocus could not fully restore filtering after a host failure. Reload the window, '
+          + 'then see RepoFocus output for details.'
+        : 'RepoFocus could not change filtering and restored the previous setting. '
+          + 'See RepoFocus output for details.';
   }
 }
