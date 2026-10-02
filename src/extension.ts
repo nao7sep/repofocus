@@ -16,6 +16,7 @@ import {
 } from './nativeVisibilityCommandExecutor';
 import { NativeVisibilityResetter } from './nativeVisibilityReset';
 import { toActionabilityInput } from './repositoryStateAdapter';
+import { describeFailure, describeMappingState } from './userMessages';
 import { VisibilityMappingCoordinator } from './visibilityMappingCoordinator';
 import { VisibilityReconciler } from './visibilityReconciler';
 
@@ -95,7 +96,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
       if (compatibilityFailureReported) return;
       compatibilityFailureReported = true;
       void vscode.window.showErrorMessage(
-        `RepoFocus stopped filtering: ${error.message}`,
+        describeFailure('compatibility', error),
         'Copy Diagnostics',
         'Open Documentation',
         'Show Output',
@@ -337,23 +338,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<RepoFo
     shutdown,
     waitForSettled,
   };
-}
-
-function describeMappingState(state: string): string | undefined {
-  switch (state) {
-    case 'awaiting-native-commands':
-      return 'RepoFocus is waiting for VS Code to create its internal repository-visibility '
-        + 'commands. Keep Source Control open and run RepoFocus: Refresh.';
-    case 'loading-repositories':
-      return 'RepoFocus is waiting for VS Code to finish its initial Git repository scan.';
-    case 'other-scm-providers':
-      return 'RepoFocus supports windows whose Source Control providers are all Git repositories.';
-    case 'incompatible':
-      return 'RepoFocus stopped filtering because VS Code\'s internal visibility contract changed. '
-        + 'Reload the window after copying diagnostics.';
-    default:
-      return undefined;
-  }
 }
 
 function readAlwaysShowConfiguration() {
