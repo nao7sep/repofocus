@@ -71,6 +71,8 @@ If RepoFocus reports a compatibility failure, run **RepoFocus: Copy Diagnostics*
 
 Disabling or uninstalling RepoFocus restores every confirmed hide it owns. If a native command never settles, RepoFocus stops issuing visibility commands and reports the unknown state rather than guessing.
 
+Questions, bug reports, and feature requests belong in [GitHub Issues](https://github.com/nao7sep/repofocus/issues). For anything security-related, e-mail instead of opening an issue.
+
 ## Development
 
 Install dependencies with `npm install`. `npm test` runs the type and unit-test gate; `npm run test:integration` builds the extension and exercises its supported workspace shapes in a real VS Code Extension Host. `npm run vscode:prepublish` runs the shipping-path check and production build.
@@ -81,6 +83,7 @@ Install dependencies with `npm install`. `npm test` runs the type and unit-test 
 
 ## Contact
 
-Yoshinao Inoguchi — yoshinao@inoguchi.com — <https://inoguchi.com>
-
-Questions, bug reports, and feature requests belong in [GitHub Issues](https://github.com/nao7sep/repofocus/issues). For anything security-related, e-mail instead of opening an issue, and redact real repository paths, remote URLs, and branch names—a synthetic reproduction is enough.
+- **Name:** Yoshinao Inoguchi
+- **GitHub:** [@nao7sep](https://github.com/nao7sep)
+- **Email:** [yoshinao@inoguchi.com](mailto:yoshinao@inoguchi.com)
+- **Website:** [inoguchi.com](https://inoguchi.com)
