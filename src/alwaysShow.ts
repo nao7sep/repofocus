@@ -8,18 +8,14 @@ function normalize(value: string): string {
 }
 
 /**
- * Candidate strings a pattern may match for one repository.
+ * Candidate strings a pattern may match for one repository: the path VS Code
+ * reported, and its final segment (the repository's own directory name).
  *
- * A repository sitting INSIDE a workspace folder has a workspace-relative path
- * (`clients/api`), which is what patterns were originally written against. A
- * repository that IS a workspace folder has no relative form at all — VS Code
- * returns its absolute path — so the only pattern that could ever match it would
- * be an absolute one, which is machine-specific and useless in shared settings.
- *
- * So each repository offers two candidates: the path VS Code reported, and its
- * final segment (the repository's own directory name). `alwaysShow: ["repofocus"]`
- * then works in both workspace shapes, and `clients/*` keeps working exactly as
- * before.
+ * A repository INSIDE a workspace folder reports a workspace-relative path
+ * (`clients/api`). A repository that IS a workspace folder reports its absolute
+ * path, which is machine-specific and useless in shared settings, so its
+ * directory name is the portable candidate. `alwaysShow: ["repofocus"]` works in
+ * both workspace shapes, and `clients/*` matches nested repositories.
  *
  * The deliberate trade: two repositories with the same directory name in
  * different roots both match a bare-name pattern. That is usually the intent —

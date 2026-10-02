@@ -59,9 +59,7 @@ export class Logger {
     try {
       this.sink.appendLine(line);
     } catch (error) {
-      // A VS Code OutputChannel can close before extension deactivation has
-      // finished. Logging must not turn orderly recovery into an unhandled
-      // rejection, so fall back to the host process console.
+      // The logging-conventions' fallback; an OutputChannel can close before deactivation finishes.
       console.error(line);
       console.error('RepoFocus log sink failed.', error);
     }

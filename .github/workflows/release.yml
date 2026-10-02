@@ -1,13 +1,10 @@
 name: Release
 
-# Per the app-release-conventions: verify → package → attach to a DRAFT release.
-# Nothing is published automatically; a draft is created for the pushed tag,
-# inspected, then published by hand (gh release edit --draft=false).
+# Follows the app-release-conventions.
 #
 # Two triggers:
 #   - push a tag `v*`     -> verify, package once, attach the VSIX + its SHA-256
-#                            to a single draft release for that tag. Not flagged a
-#                            pre-release; see the `prerelease:` note below for why.
+#                            to a single draft release for that tag.
 #   - manual dispatch     -> verify and package only, no release. The VSIX is left
 #                            as a workflow artifact so a smoke check has something
 #                            inspectable without creating anything public.
@@ -129,18 +126,12 @@ jobs:
             ${{ steps.package.outputs.digest }}
           if-no-files-found: error
 
-      # The one release action used fleet-wide, pinned to a full commit SHA.
       # Tag pushes only — a dispatch run stops at the artifact above.
       - name: Attach to draft release
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           draft: true
-          # NOT a pre-release. "Pre-release" versus "release" is a subjective label
-          # that buys no real latitude — it reads as an excuse rather than a fact —
-          # so a 0.x version number carries that signal on its own. The draft flag
-          # above is what actually protects the release: nothing goes public until
-          # it is inspected and published by hand.
           prerelease: false
           fail_on_unmatched_files: true
           name: RepoFocus ${{ github.ref_name }}

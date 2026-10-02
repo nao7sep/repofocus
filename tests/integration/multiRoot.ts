@@ -7,8 +7,8 @@
 // returns the ABSOLUTE PATH unchanged — identically for `true`, `false`, and the
 // default. There is no relative form to produce, so the `includeWorkspaceFolder`
 // argument is inert in this shape. (It is not inert for a repository nested
-// inside a multi-root folder, which is why the extension now omits the argument
-// and lets VS Code's own multi-root-aware default apply.)
+// inside a multi-root folder, so the extension omits the argument and uses
+// VS Code's own multi-root-aware default.)
 //
 // RepoFocus therefore checks both VS Code's path value and the repository's
 // directory name. This fixture uses an absolute pattern to target only one of
