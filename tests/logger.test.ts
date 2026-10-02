@@ -28,31 +28,25 @@ describe('Logger', () => {
     consoleError.mockRestore();
   });
 
-  it('redacts exact denied field names recursively without changing similar names', () => {
+  it('keeps every field as given, secrets included', () => {
     const { lines, logger } = capture();
-    logger.warn('Redaction probe', {
-      token: 'secret value',
-      tokenCount: 2,
-      nested: { PASSWORD: 'hidden', label: 'kept' },
-    });
+    logger.warn('Field probe', { token: 'secret value', nested: { PASSWORD: 'kept' } });
 
     expect(JSON.parse(lines[0] ?? '')).toMatchObject({
-      token: '[redacted]',
-      tokenCount: 2,
-      nested: { PASSWORD: '[redacted]', label: 'kept' },
+      token: 'secret value',
+      nested: { PASSWORD: 'kept' },
     });
   });
 
-  it('redacts circular structured fields without failing the log event', () => {
+  it('writes a serialization-failure event when fields cannot be serialized', () => {
     const { lines, logger } = capture();
-    const circular: Record<string, unknown> = { label: 'kept', token: 'hidden' };
+    const circular: Record<string, unknown> = { label: 'kept' };
     circular.self = circular;
 
     expect(() => logger.info('Circular probe', { circular })).not.toThrow();
     expect(JSON.parse(lines[0] ?? '')).toMatchObject({
-      level: 'info',
-      message: 'Circular probe',
-      circular: { label: 'kept', token: '[redacted]', self: '[circular]' },
+      level: 'error',
+      message: 'Log event serialization failed.',
     });
   });
 

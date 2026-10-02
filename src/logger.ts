@@ -4,28 +4,6 @@ export interface LogSink {
   appendLine(value: string): void;
 }
 
-const deniedKeys = new Set(['apikey', 'authorization', 'password', 'secret', 'token']);
-
-function redact(value: unknown, ancestors = new WeakSet<object>()): unknown {
-  if (value === null || typeof value !== 'object') return value;
-
-  if (ancestors.has(value)) return '[circular]';
-  ancestors.add(value);
-
-  if (Array.isArray(value)) {
-    const result = value.map(item => redact(item, ancestors));
-    ancestors.delete(value);
-    return result;
-  }
-
-  const result: Record<string, unknown> = {};
-  for (const [key, child] of Object.entries(value)) {
-    result[key] = deniedKeys.has(key.toLowerCase()) ? '[redacted]' : redact(child, ancestors);
-  }
-  ancestors.delete(value);
-  return result;
-}
-
 function serializeError(error: unknown, seen = new Set<unknown>()): unknown {
   if (!(error instanceof Error)) return { type: typeof error, message: String(error) };
   if (seen.has(error)) return { type: error.name, message: error.message, cause: '[circular]' };
@@ -63,13 +41,12 @@ export class Logger {
   private write(level: LogLevel, message: string, fields: Readonly<Record<string, unknown>>): void {
     let line: string;
     try {
-      const event = redact({
+      line = JSON.stringify({
         time: new Date().toISOString(),
         level,
         message,
         ...fields,
       });
-      line = JSON.stringify(event);
     } catch (error) {
       line = JSON.stringify({
         time: new Date().toISOString(),
