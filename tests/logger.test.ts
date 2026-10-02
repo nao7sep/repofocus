@@ -59,6 +59,17 @@ describe('Logger', () => {
     expect(event.error.cause.type).toBe('TypeError');
   });
 
+  it('records the error a warning carries', () => {
+    const { lines, logger } = capture();
+    logger.warn('Evaluation probe', { repository: '/work/alpha' }, new RangeError('bad count'));
+
+    expect(JSON.parse(lines[0] ?? '')).toMatchObject({
+      level: 'warn',
+      repository: '/work/alpha',
+      error: { type: 'RangeError', message: 'bad count' },
+    });
+  });
+
   it('emits debug events only when explicitly enabled', () => {
     const disabled = capture();
     const enabled = capture(true);

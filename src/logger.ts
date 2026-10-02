@@ -30,8 +30,8 @@ export class Logger {
     this.write('info', message, fields);
   }
 
-  warn(message: string, fields: Readonly<Record<string, unknown>> = {}): void {
-    this.write('warn', message, fields);
+  warn(message: string, fields: Readonly<Record<string, unknown>> = {}, error?: unknown): void {
+    this.write('warn', message, error === undefined ? fields : { ...fields, error: serializeError(error) });
   }
 
   error(message: string, error: unknown, fields: Readonly<Record<string, unknown>> = {}): void {

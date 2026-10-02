@@ -168,14 +168,23 @@ async function start(
 
   const evaluateRepository = (repository: GitRepository): void => {
     let value: RepositoryActionability;
+    let evaluationError: unknown;
     try {
       value = classifyRepository({
         ...toActionabilityInput(repository.state),
         alwaysShow: alwaysShow.matches(vscode.workspace.asRelativePath(repository.rootUri.fsPath)),
       });
     } catch (error) {
+      evaluationError = error;
       const detail = error instanceof Error ? error.message : String(error);
       value = { actionable: true, reasons: [{ kind: 'error', detail }] };
+    }
+    const errorDetails = value.reasons.flatMap(reason => reason.kind === 'error' ? [reason.detail] : []);
+    if (errorDetails.length > 0) {
+      logger.warn('Repository evaluation failed; the repository stays visible.', {
+        repository: repository.rootUri.fsPath,
+        errors: errorDetails,
+      }, evaluationError);
     }
     actionability.set(repository.rootUri.toString(), value);
     reconciler.setActionability(repository, value);
