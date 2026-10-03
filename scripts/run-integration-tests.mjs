@@ -20,8 +20,8 @@ const vscodeExecutablePath = process.env.VSCODE_EXECUTABLE_PATH;
 const vscodeVersion = process.env.REPOFOCUS_INTEGRATION_VSCODE_VERSION ?? '1.131.0';
 const repositoryCount = Number(process.env.REPOFOCUS_INTEGRATION_REPOSITORY_COUNT ?? '50');
 
-if (!Number.isSafeInteger(repositoryCount) || repositoryCount < 2) {
-  throw new Error('REPOFOCUS_INTEGRATION_REPOSITORY_COUNT must be an integer of at least 2.');
+if (!Number.isSafeInteger(repositoryCount) || repositoryCount < 4) {
+  throw new Error('REPOFOCUS_INTEGRATION_REPOSITORY_COUNT must be an integer of at least 4.');
 }
 
 function git(repositoryPath, ...args) {

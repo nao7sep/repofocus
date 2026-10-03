@@ -1,8 +1,9 @@
 import { strict as assert } from 'node:assert';
 import { execFileSync } from 'node:child_process';
-import { appendFile, readFile, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { basename, dirname, join, resolve } from 'node:path';
 import * as vscode from 'vscode';
+import type { ActionabilityReason } from '../../src/actionability';
 import type { GitRepository } from '../../src/gitApi';
 import type { RepoFocusExtensionApi } from '../../src/extension';
 
@@ -39,12 +40,53 @@ function repositoryAt(api: RepoFocusExtensionApi, path: string): GitRepository |
   });
 }
 
+function git(cwd: string, ...args: string[]): void {
+  execFileSync('git', args, { cwd, stdio: 'ignore' });
+}
+
+/** Runs a Git command that must stop on a conflict, which Git reports by exiting non-zero. */
+function gitStoppingOnConflict(cwd: string, ...args: string[]): void {
+  try {
+    execFileSync('git', args, { cwd, stdio: 'ignore' });
+  } catch {
+    return;
+  }
+  throw new Error(`git ${args.join(' ')} was expected to stop on a conflict.`);
+}
+
+async function expectShownFor(
+  api: RepoFocusExtensionApi,
+  repository: GitRepository,
+  kind: ActionabilityReason['kind'],
+  description: string,
+): Promise<void> {
+  await repository.status();
+  await waitFor(description, () =>
+    api.getActionability(repository)?.reasons.some(reason => reason.kind === kind) ? true : undefined,
+  );
+  await api.waitForSettled();
+  assert.equal(api.isHiddenByRepoFocus(repository), false, `${description}: the repository must be visible.`);
+}
+
+async function expectHidden(
+  api: RepoFocusExtensionApi,
+  repository: GitRepository,
+  description: string,
+): Promise<void> {
+  await repository.status();
+  await waitFor(description, () =>
+    api.getActionability(repository)?.actionable === false && api.isHiddenByRepoFocus(repository)
+      ? true : undefined,
+  );
+}
+
 export async function run(): Promise<void> {
   const fixtureRoot = process.env.REPOFOCUS_INTEGRATION_ROOT;
   const updaterPath = process.env.REPOFOCUS_INTEGRATION_UPDATER;
   assert(fixtureRoot, 'REPOFOCUS_INTEGRATION_ROOT must identify the integration workspace.');
   assert(updaterPath, 'REPOFOCUS_INTEGRATION_UPDATER must identify the upstream fixture clone.');
-  const expectedRepositoryCount = Number(process.env.REPOFOCUS_INTEGRATION_REPOSITORY_COUNT ?? '2');
+  const expectedRepositoryCount = Number(process.env.REPOFOCUS_INTEGRATION_REPOSITORY_COUNT ?? '4');
+  assert(expectedRepositoryCount >= 4, 'The fixture needs alpha, beta, repo-03 and repo-04.');
   const initialFilteringTimeoutMilliseconds = 15_000;
   await vscode.commands.executeCommand('workbench.view.explorer');
   await vscode.workspace.getConfiguration('git').update(
@@ -159,7 +201,14 @@ export async function run(): Promise<void> {
   const configuration = vscode.workspace.getConfiguration('repofocus');
   assert.equal(api.git.repositories.length, before, 'Hiding must not remove repositories from the Git API.');
   await vscode.commands.executeCommand('repofocus.copyDiagnostics');
-  const diagnostics = JSON.parse(await vscode.env.clipboard.readText()) as {
+  const diagnosticsText = await vscode.env.clipboard.readText();
+  for (const forbidden of [basename(fixtureRoot), basename(dirname(updaterPath)), 'alpha', 'beta', 'tracked.txt', 'refs/', '"main"']) {
+    assert(
+      !diagnosticsText.includes(forbidden),
+      `Copied diagnostics must not contain repository paths, names, file names or branch names; found "${forbidden}".`,
+    );
+  }
+  const diagnostics = JSON.parse(diagnosticsText) as {
     repositoryCount?: number;
     nativeMappingState?: string;
   };
@@ -296,9 +345,141 @@ export async function run(): Promise<void> {
   await vscode.commands.executeCommand('git.close', alpha.rootUri);
   await waitFor('alpha repository to close', () => repositoryAt(api, alphaPath) ? undefined : true);
   await openRepository(alphaPath);
-  const reopenedAlpha = await waitFor('alpha repository to reopen', () => repositoryAt(api, alphaPath));
+  let reopenedAlpha = await waitFor('alpha repository to reopen', () => repositoryAt(api, alphaPath));
   await api.waitForSettled();
   assert.equal(api.isHiddenByRepoFocus(reopenedAlpha), true, 'A clean repository reopened after activation must be hidden.');
+
+  // Every other condition the README lists as keeping a repository visible, and
+  // every state it says stays hidden, through VS Code's real Git reporting.
+  const repo03Path = join(fixtureRoot, 'repo-03');
+  const repo03 = repositoryAt(api, repo03Path);
+  assert(repo03, 'The fixture must include repo-03.');
+
+  await writeFile(join(repo03Path, 'staged.txt'), 'staged\n', 'utf8');
+  git(repo03Path, 'add', 'staged.txt');
+  await expectShownFor(api, repo03, 'staged', 'staged-change actionability');
+  git(repo03Path, 'reset', '--hard', '-q');
+  await expectHidden(api, repo03, 'repository with its staged change removed to become hidden');
+
+  git(repo03Path, 'checkout', '-q', '-b', 'other');
+  await writeFile(join(repo03Path, 'tracked.txt'), 'other side\n', 'utf8');
+  git(repo03Path, 'commit', '-q', '-am', 'other side');
+  git(repo03Path, 'checkout', '-q', 'main');
+  await writeFile(join(repo03Path, 'tracked.txt'), 'main side\n', 'utf8');
+  git(repo03Path, 'commit', '-q', '-am', 'main side');
+  gitStoppingOnConflict(repo03Path, 'merge', 'other');
+  await expectShownFor(api, repo03, 'conflicts', 'merge-conflict actionability');
+  git(repo03Path, 'merge', '--abort');
+  await expectHidden(api, repo03, 'repository with its merge aborted to become hidden');
+
+  git(repo03Path, 'checkout', '-q', 'other');
+  gitStoppingOnConflict(repo03Path, 'rebase', 'main');
+  await expectShownFor(api, repo03, 'rebase', 'rebase-in-progress actionability');
+  git(repo03Path, 'rebase', '--abort');
+
+  // A local-only branch in a repository with no remote is not work by itself.
+  await repo03.status();
+  await waitFor('repo-03 to report its local-only branch', () =>
+    repo03.state.HEAD?.name === 'other' ? true : undefined);
+  await expectHidden(api, repo03, 'a local-only branch to stay hidden');
+  git(repo03Path, 'checkout', '-q', 'main');
+  await expectHidden(api, repo03, 'repo-03 back on main to stay hidden');
+
+  // A named branch with no upstream is unpublished work once the repository has a remote.
+  git(alphaPath, 'checkout', '-q', '-b', 'feature');
+  await expectShownFor(api, reopenedAlpha, 'unpublished', 'unpublished-branch actionability');
+  git(alphaPath, 'checkout', '-q', 'main');
+  git(alphaPath, 'branch', '-q', '-D', 'feature');
+  await expectHidden(api, reopenedAlpha, 'alpha back on its published branch to become hidden');
+
+  git(alphaPath, 'checkout', '-q', '--detach');
+  await reopenedAlpha.status();
+  await waitFor('alpha to report a detached HEAD', () =>
+    reopenedAlpha.state.HEAD && !reopenedAlpha.state.HEAD.name ? true : undefined);
+  await expectHidden(api, reopenedAlpha, 'a detached HEAD to stay hidden');
+  git(alphaPath, 'checkout', '-q', 'main');
+  await expectHidden(api, reopenedAlpha, 'alpha back on main to stay hidden');
+
+  const unbornPath = join(fixtureRoot, 'unborn');
+  await mkdir(unbornPath);
+  git(unbornPath, 'init', '-q', '-b', 'main');
+  await openRepository(unbornPath);
+  const unborn = await waitFor('the unborn repository to open', () => repositoryAt(api, unbornPath));
+  await api.waitForSettled();
+  await expectHidden(api, unborn, 'an unborn repository to stay hidden');
+  await vscode.commands.executeCommand('git.close', unborn.rootUri);
+  await waitFor('the unborn repository to close', () => repositoryAt(api, unbornPath) ? undefined : true);
+  await api.waitForSettled();
+  await expectHidden(api, reopenedAlpha, 'alpha to stay hidden after the topology change');
+  assert.equal(api.isHiddenByRepoFocus(beta), false, 'beta, still holding an untracked file, must stay visible.');
+
+  // A glob pattern, not only a bare name.
+  const globMatched = repositoryPaths.filter(path => /^repo-0\d$/.test(basename(path)));
+  assert(globMatched.length >= 2, 'The glob fixture needs at least repo-03 and repo-04.');
+  await configuration.update('alwaysShow', ['repo-0*'], vscode.ConfigurationTarget.Workspace);
+  await waitFor('every repository matching repo-0* to become visible', () =>
+    globMatched.every(path => {
+      const repository = repositoryAt(api, path);
+      return repository
+        && api.getActionability(repository)?.reasons.some(reason => reason.kind === 'always-show')
+        && !api.isHiddenByRepoFocus(repository);
+    }) ? true : undefined,
+  );
+  await api.waitForSettled();
+  assert.equal(api.isHiddenByRepoFocus(reopenedAlpha), true, 'A repository the glob does not match must stay hidden.');
+  await configuration.update('alwaysShow', [], vscode.ConfigurationTarget.Workspace);
+  await waitFor('repositories released from the glob to become hidden', () =>
+    globMatched.every(path => {
+      const repository = repositoryAt(api, path);
+      return repository && api.isHiddenByRepoFocus(repository);
+    }) ? true : undefined,
+  );
+
+  // A mapping already made stays valid when a non-Git provider appears, because
+  // each Git repository keeps its own native command. The next mapping, after a
+  // repository opens or closes, cannot tell the providers apart, so RepoFocus
+  // stands down and shows every repository; Refresh resumes once it is gone.
+  const otherProvider = vscode.scm.createSourceControl(
+    'repofocus-integration',
+    'Non-Git provider',
+    vscode.Uri.file(fixtureRoot),
+  );
+  otherProvider.createResourceGroup('changes', 'Changes');
+  // RepoFocus recognizes another provider by VS Code's per-repository visibility
+  // commands, so Refresh is meaningful only once VS Code has registered the new one.
+  const visibilityCommandCount = async (): Promise<number> =>
+    (await vscode.commands.getCommands(true))
+      .filter(command => command.startsWith('workbench.scm.action.toggleRepositoryVisibility.')).length;
+  const registrationDeadline = Date.now() + defaultWaitTimeoutMilliseconds;
+  while (await visibilityCommandCount() <= api.git.repositories.length) {
+    if (Date.now() > registrationDeadline) {
+      throw new Error('Timed out waiting for VS Code to register the non-Git provider\'s visibility command.');
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  await vscode.commands.executeCommand('repofocus.refresh');
+  await api.waitForSettled();
+  assert.equal(api.isHiddenByRepoFocus(reopenedAlpha), true, 'An existing mapping must keep filtering beside a non-Git provider.');
+  await vscode.commands.executeCommand('git.close', reopenedAlpha.rootUri);
+  await waitFor('alpha to close beside the non-Git provider', () => repositoryAt(api, alphaPath) ? undefined : true);
+  await openRepository(alphaPath);
+  reopenedAlpha = await waitFor('alpha to reopen beside the non-Git provider', () => repositoryAt(api, alphaPath));
+  await waitFor('RepoFocus to stand down beside a non-Git provider', () =>
+    api.getActionability(reopenedAlpha) && !api.isHiddenByRepoFocus(reopenedAlpha) ? true : undefined,
+  );
+  await api.waitForSettled();
+  await vscode.commands.executeCommand('repofocus.copyDiagnostics');
+  assert.equal(
+    (JSON.parse(await vscode.env.clipboard.readText()) as { nativeMappingState?: string }).nativeMappingState,
+    'other-scm-providers',
+    'Diagnostics must name the non-Git provider as the reason filtering paused.',
+  );
+  otherProvider.dispose();
+  await vscode.commands.executeCommand('repofocus.refresh');
+  await waitFor('filtering to resume once the non-Git provider is gone', () =>
+    api.isHiddenByRepoFocus(reopenedAlpha) ? true : undefined,
+  );
+  await api.waitForSettled();
 
   const visualPauseMilliseconds = Number(process.env.REPOFOCUS_VISUAL_PAUSE_MS ?? '0');
   if (visualPauseMilliseconds > 0) {
