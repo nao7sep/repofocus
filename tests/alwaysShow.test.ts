@@ -83,6 +83,21 @@ describe('matchesAlwaysShow', () => {
     expect(configuration.matches('unrelated')).toBe(true);
   });
 
+  it.each(['win32', 'darwin'] as const)('ignores case on %s', platform => {
+    const configuration = compileAlwaysShowConfiguration(['Alpha'], platform);
+
+    expect(configuration.matches('alpha')).toBe(true);
+    expect(configuration.matches('/work/alpha')).toBe(true);
+  });
+
+  it('matches case exactly on linux', () => {
+    const configuration = compileAlwaysShowConfiguration(['Alpha'], 'linux');
+
+    expect(configuration.matches('alpha')).toBe(false);
+    expect(configuration.matches('/work/alpha')).toBe(false);
+    expect(configuration.matches('Alpha')).toBe(true);
+  });
+
   it('retains only the aggregate count for a malformed array', () => {
     const configuration = compileAlwaysShowConfiguration(['repofocus', null]);
 

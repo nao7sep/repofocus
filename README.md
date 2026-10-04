@@ -45,7 +45,7 @@ A repository remains visible when RepoFocus observes any of these conditions:
 
 A detached HEAD, unborn branch, or local-only branch is not remote work by itself. Uncertain state remains visible.
 
-The `repofocus.alwaysShow` setting accepts Git repository glob patterns. A pattern matches either the path VS Code reports for a repository or its directory name. Matching is case-sensitive except on Windows. Useful examples include `company`, `clients/*`, and `experiments/**`. A bare directory name is the most portable way to match a repository that is itself a multi-root workspace folder; use a longer path when repositories with the same directory name should differ.
+The `repofocus.alwaysShow` setting accepts Git repository glob patterns. A pattern matches either the path VS Code reports for a repository or its directory name. Matching ignores upper and lower case on Windows and macOS, and is exact on Linux. Useful examples include `company`, `clients/*`, and `experiments/**`. A bare directory name is the most portable way to match a repository that is itself a multi-root workspace folder; use a longer path when repositories with the same directory name should differ.
 
 ## Commands
 

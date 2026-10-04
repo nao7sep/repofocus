@@ -42,7 +42,18 @@ export interface AlwaysShowConfiguration {
   readonly valid: boolean;
 }
 
-export function compileAlwaysShowConfiguration(value: unknown): AlwaysShowConfiguration {
+/**
+ * Matching follows how the platform's disks usually treat names: Windows and
+ * macOS ignore upper and lower case, Linux does not.
+ */
+function ignoresCase(platform: NodeJS.Platform): boolean {
+  return platform === 'win32' || platform === 'darwin';
+}
+
+export function compileAlwaysShowConfiguration(
+  value: unknown,
+  platform: NodeJS.Platform = process.platform,
+): AlwaysShowConfiguration {
   if (!Array.isArray(value)) {
     return { patternCount: 0, matches: () => true, valid: false };
   }
@@ -61,7 +72,7 @@ export function compileAlwaysShowConfiguration(value: unknown): AlwaysShowConfig
   const validPatterns = patterns as readonly string[];
   // Brace expansion is not part of the documented pattern surface and can
   // multiply one setting into a very large generated pattern set.
-  const options = { dot: true, nobrace: true, nocase: process.platform === 'win32' } as const;
+  const options = { dot: true, nobrace: true, nocase: ignoresCase(platform) } as const;
   const matchers = validPatterns.map(pattern => new Minimatch(normalize(pattern), options));
   return {
     patternCount: validPatterns.length,
