@@ -44,6 +44,7 @@ export class VisibilityReconciler {
   private scheduled = false;
   private ambiguousRecovery: Promise<void> | undefined;
   private queue: Promise<void> = Promise.resolve();
+  private pendingToggles = 0;
 
   constructor(private readonly options: VisibilityReconcilerOptions) {}
 
@@ -59,10 +60,18 @@ export class VisibilityReconciler {
     return this.hiddenCommands.size;
   }
 
+  /**
+   * True while a native toggle has been sent and its completion not yet seen.
+   * Such a toggle may land after a native transition observed meanwhile.
+   */
+  get toggling(): boolean {
+    return this.pendingToggles > 0;
+  }
+
   async hide(command: string): Promise<void> {
     this.hiddenCommands.add(command);
     try {
-      await this.options.toggle(command);
+      await this.toggle(command);
     } catch (error) {
       await this.failAmbiguousToggle(error);
       throw error;
@@ -71,7 +80,7 @@ export class VisibilityReconciler {
 
   async reveal(command: string): Promise<void> {
     try {
-      await this.options.toggle(command);
+      await this.toggle(command);
     } catch (error) {
       await this.failAmbiguousToggle(error);
       throw error;
@@ -184,6 +193,15 @@ export class VisibilityReconciler {
     await this.restoreOwnedCommands();
     this.actionability.clear();
     this.mappings.clear();
+  }
+
+  private async toggle(command: string): Promise<void> {
+    this.pendingToggles += 1;
+    try {
+      await this.options.toggle(command);
+    } finally {
+      this.pendingToggles -= 1;
+    }
   }
 
   private requestReconcile(): void {

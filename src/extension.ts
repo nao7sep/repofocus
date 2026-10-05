@@ -84,17 +84,6 @@ async function start(
   let alwaysShow = readAlwaysShowConfiguration();
   let compatibilityFailureReported = false;
 
-  const readSelectionMode = (): string =>
-    vscode.workspace.getConfiguration('scm')
-      .get<string>('repositories.selectionMode', 'multiple');
-  const nativeVisibilityResetter = new NativeVisibilityResetter({
-    executeCommand: command => nativeVisibilityCommands.execute(command),
-    getSelectionMode: readSelectionMode,
-    onDidChangeSelectionMode: listener => vscode.workspace.onDidChangeConfiguration(event => {
-      if (event.affectsConfiguration('scm.repositories.selectionMode')) listener();
-    }),
-  });
-
   const reconciler = new VisibilityReconciler({
     toggle: command => nativeVisibilityCommands.execute(command),
     resetToAllVisible: async () => {
@@ -179,6 +168,21 @@ async function start(
       });
     },
   });
+
+  const nativeVisibilityResetter = new NativeVisibilityResetter({
+    executeCommand: command => nativeVisibilityCommands.execute(command),
+    getSelectionMode: () => vscode.workspace.getConfiguration('scm')
+      .get<string>('repositories.selectionMode', 'multiple'),
+    onDidChangeSelectionMode: listener => vscode.workspace.onDidChangeConfiguration(event => {
+      if (event.affectsConfiguration('scm.repositories.selectionMode')) listener();
+    }),
+    onForeignDeparture: () => visibility.requestRefresh(),
+    onForeignReset: () => {
+      logger.info('Repository selection mode returned to multiple outside RepoFocus.');
+      visibility.acceptForeignReset();
+    },
+  });
+  context.subscriptions.push(nativeVisibilityResetter);
 
   const evaluateRepository = (repository: GitRepository): void => {
     let value: RepositoryActionability;
@@ -331,13 +335,6 @@ async function start(
     }),
     vscode.commands.registerCommand('repofocus.copyDiagnostics', copyDiagnostics),
     vscode.workspace.onDidChangeConfiguration(event => {
-      if (
-        event.affectsConfiguration('scm.repositories.selectionMode')
-        && !nativeVisibilityResetter.running
-        && readSelectionMode() !== 'multiple'
-      ) {
-        visibility.requestRefresh();
-      }
       if (!event.affectsConfiguration('repofocus.alwaysShow')) return;
       alwaysShow = readAlwaysShowConfiguration();
       evaluateAll();
@@ -361,6 +358,7 @@ async function start(
   const shutdown = (): Promise<void> => {
     shutdownPromise ??= (async () => {
       monitor.dispose();
+      nativeVisibilityResetter.dispose();
       visibility.dispose();
       await visibility.waitForIdle();
       await reconciler.shutdown();

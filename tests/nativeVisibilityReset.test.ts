@@ -73,6 +73,8 @@ describe('resetNativeRepositoryVisibility', () => {
       executeCommand,
       getSelectionMode: () => mode,
       onDidChangeSelectionMode: changed.event,
+      onForeignDeparture: () => {},
+      onForeignReset: () => {},
       timeoutMilliseconds: 100,
     });
 
@@ -80,9 +82,10 @@ describe('resetNativeRepositoryVisibility', () => {
     const second = resetter.reset();
     expect(second).toBe(first);
     await Promise.all([first, second]);
-
     expect(executeCommand).toHaveBeenCalledTimes(2);
-    expect(resetter.running).toBe(false);
+
+    await resetter.reset();
+    expect(executeCommand).toHaveBeenCalledTimes(4);
   });
 
   it('shares one timeout across both selection-mode transitions', async () => {
@@ -110,5 +113,70 @@ describe('resetNativeRepositoryVisibility', () => {
     await result;
     expect(executeCommand).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
+  });
+});
+
+describe('NativeVisibilityResetter selection-mode observation', () => {
+  function observedResetter() {
+    const changed = modeEvent();
+    let mode = 'multiple';
+    const onForeignDeparture = vi.fn();
+    const onForeignReset = vi.fn();
+    const resetter = new NativeVisibilityResetter({
+      executeCommand: async command => {
+        mode = command === selectionModeCommands.single ? 'single' : 'multiple';
+        changed.fire();
+      },
+      getSelectionMode: () => mode,
+      onDidChangeSelectionMode: changed.event,
+      onForeignDeparture,
+      onForeignReset,
+      timeoutMilliseconds: 100,
+    });
+    const setForeignMode = (next: string): void => {
+      mode = next;
+      changed.fire();
+    };
+    return { changed, onForeignDeparture, onForeignReset, resetter, setForeignMode };
+  }
+
+  it("reports another window's brief single selection as a departure and an all-visible return", () => {
+    const fixture = observedResetter();
+
+    fixture.setForeignMode('single');
+    expect(fixture.onForeignDeparture).toHaveBeenCalledOnce();
+    expect(fixture.onForeignReset).not.toHaveBeenCalled();
+
+    fixture.setForeignMode('multiple');
+    expect(fixture.onForeignDeparture).toHaveBeenCalledOnce();
+    expect(fixture.onForeignReset).toHaveBeenCalledOnce();
+  });
+
+  it('does not report its own reset as a foreign transition', async () => {
+    const fixture = observedResetter();
+
+    await fixture.resetter.reset();
+
+    expect(fixture.onForeignDeparture).not.toHaveBeenCalled();
+    expect(fixture.onForeignReset).not.toHaveBeenCalled();
+  });
+
+  it('ignores configuration events that leave the selection mode unchanged', () => {
+    const fixture = observedResetter();
+
+    fixture.setForeignMode('multiple');
+    fixture.setForeignMode('single');
+    fixture.setForeignMode('single');
+
+    expect(fixture.onForeignDeparture).toHaveBeenCalledOnce();
+    expect(fixture.onForeignReset).not.toHaveBeenCalled();
+  });
+
+  it('stops observing once disposed', () => {
+    const fixture = observedResetter();
+
+    fixture.resetter.dispose();
+
+    expect(fixture.changed.listenerCount()).toBe(0);
   });
 });

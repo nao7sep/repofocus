@@ -12,24 +12,59 @@ export interface NativeVisibilityResetOptions {
   readonly timeoutMilliseconds?: number;
 }
 
-/** Coalesce automatic and user-requested reset attempts into one transition. */
-export class NativeVisibilityResetter {
+export interface NativeVisibilityResetterOptions extends NativeVisibilityResetOptions {
+  /** Another window, or the user, moved this window's selection mode away from multiple. */
+  readonly onForeignDeparture: () => void;
+  /**
+   * Another window, or the user, returned this window's selection mode to
+   * multiple, which VS Code answers by showing every repository.
+   */
+  readonly onForeignReset: () => void;
+}
+
+/**
+ * Owns this window's selection-mode transitions. It coalesces automatic and
+ * user-requested resets into one transition, and reports every selection-mode
+ * transition it did not make: VS Code applies the user setting in every open
+ * window, so another window's reset arrives here as a departure from multiple
+ * and a return to it.
+ */
+export class NativeVisibilityResetter implements DisposableLike {
   private active: Promise<void> | undefined;
+  private observedMode: string;
+  private readonly subscription: DisposableLike;
 
-  constructor(private readonly options: NativeVisibilityResetOptions) {}
+  constructor(private readonly options: NativeVisibilityResetterOptions) {
+    this.observedMode = options.getSelectionMode();
+    this.subscription = options.onDidChangeSelectionMode(() => this.observeSelectionMode());
+  }
 
-  get running(): boolean {
-    return this.active !== undefined;
+  dispose(): void {
+    this.subscription.dispose();
   }
 
   reset(): Promise<void> {
     if (this.active) return this.active;
-    const operation = resetNativeRepositoryVisibility(this.options);
-    const tracked = operation.finally(() => {
-      if (this.active === tracked) this.active = undefined;
-    });
+    // Claimed before the first command starts, so every transition it causes
+    // is observed as this window's own.
+    const tracked = Promise.resolve()
+      .then(() => resetNativeRepositoryVisibility(this.options))
+      .finally(() => {
+        if (this.active === tracked) this.active = undefined;
+      });
     this.active = tracked;
     return tracked;
+  }
+
+  private observeSelectionMode(): void {
+    const previous = this.observedMode;
+    const mode = this.options.getSelectionMode();
+    this.observedMode = mode;
+    // This listener is registered before a reset's own transition listener, so
+    // the reset is still active when its final transition is observed.
+    if (this.active || mode === previous) return;
+    if (mode === 'multiple') this.options.onForeignReset();
+    else if (previous === 'multiple') this.options.onForeignDeparture();
   }
 }
 

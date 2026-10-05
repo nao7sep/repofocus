@@ -49,12 +49,40 @@ function delay(milliseconds: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, milliseconds));
 }
 
+/** A settle wait that ends early, without error, when it is cancelled. */
+class SettleWait {
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private finish: (() => void) | undefined;
+
+  wait(milliseconds: number): Promise<void> {
+    this.cancel();
+    return new Promise(resolve => {
+      this.finish = resolve;
+      this.timer = setTimeout(() => this.cancel(), milliseconds);
+    });
+  }
+
+  cancel(): void {
+    if (this.timer !== undefined) clearTimeout(this.timer);
+    const finish = this.finish;
+    this.timer = undefined;
+    this.finish = undefined;
+    finish?.();
+  }
+}
+
 export class VisibilityMappingCoordinator {
   private revision = 0;
   private requestedAt = 0;
   private run: Promise<void> | undefined;
   private disposed = false;
   private hasBaseline = false;
+  /**
+   * Native visibility is known to be all-visible and nothing has touched it
+   * since, so the pending refresh can map without a reset of its own.
+   */
+  private nativeAllVisible = false;
+  private readonly settle = new SettleWait();
   private unavailableReason: VisibilityUnavailableReason | undefined;
   private reportedReason: VisibilityUnavailableReason | undefined;
   private commandRegistrationRetry: ReturnType<typeof setTimeout> | undefined;
@@ -84,8 +112,26 @@ export class VisibilityMappingCoordinator {
     this.revision += 1;
     this.requestedAt = Date.now();
     this.hasBaseline = false;
+    this.nativeAllVisible = false;
     void this.options.reconciler.pause();
     this.startDrain();
+  }
+
+  /**
+   * Another window's reset passed this window's selection mode through single
+   * and back to multiple, and VS Code answers the return to multiple by
+   * showing every repository here too. That is the state RepoFocus's own reset
+   * produces, so mapping restarts from it without a reset that would in turn
+   * pass every other window through the same transition. A toggle still in
+   * flight may have landed after the transition, so it forces a real reset.
+   */
+  acceptForeignReset(): void {
+    if (this.disposed || !this.options.reconciler.compatible) return;
+    const allVisible = !this.options.reconciler.toggling;
+    this.requestRefresh();
+    if (!allVisible) return;
+    this.options.reconciler.acceptAllVisible();
+    this.nativeAllVisible = true;
   }
 
   retryIfUnavailable(): void {
@@ -117,6 +163,7 @@ export class VisibilityMappingCoordinator {
     if (this.disposed) return;
     this.disposed = true;
     this.revision += 1;
+    this.settle.cancel();
     if (this.commandRegistrationRetry) clearTimeout(this.commandRegistrationRetry);
     this.commandRegistrationRetry = undefined;
   }
@@ -130,7 +177,7 @@ export class VisibilityMappingCoordinator {
       const revision = this.revision;
       const settleMilliseconds = this.options.topologySettleMilliseconds ?? 1_000;
       const remaining = settleMilliseconds - (Date.now() - this.requestedAt);
-      if (remaining > 0) await delay(remaining);
+      if (remaining > 0) await this.settle.wait(remaining);
       if (this.disposed || !this.options.reconciler.compatible) return;
       if (revision !== this.revision) continue;
       await this.refreshOnce(revision);
@@ -202,7 +249,8 @@ export class VisibilityMappingCoordinator {
     if (revision !== this.revision || this.disposed) return;
 
     try {
-      await this.options.resetNativeVisibility();
+      if (!this.nativeAllVisible) await this.options.resetNativeVisibility();
+      this.nativeAllVisible = false;
       this.options.reconciler.acceptAllVisible();
       if (revision !== this.revision || this.disposed) return;
 

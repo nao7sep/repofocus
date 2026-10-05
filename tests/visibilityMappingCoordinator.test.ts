@@ -513,4 +513,91 @@ describe('VisibilityMappingCoordinator', () => {
     expect(reconciler.compatible).toBe(false);
     expect(onError.mock.calls[0][0]).toBe(failure);
   });
+
+  it("re-maps without a reset of its own after another window's brief single selection", async () => {
+    const fixture = coordinatorFixture(['alpha', 'beta']);
+    fixture.coordinator.requestRefresh();
+    await fixture.coordinator.waitForIdle();
+    await fixture.reconciler.waitForIdle();
+    expect(fixture.native.visible.size).toBe(0);
+
+    // VS Code shows every repository when the selection mode returns to multiple.
+    fixture.coordinator.requestRefresh();
+    void fixture.native.reset();
+    fixture.coordinator.acceptForeignReset();
+    await fixture.coordinator.waitForIdle();
+    await fixture.reconciler.waitForIdle();
+
+    expect(fixture.resetNativeVisibility).toHaveBeenCalledOnce();
+    expect(fixture.coordinator.baselineEstablished).toBe(true);
+    expect(fixture.reconciler.hiddenRepositoryCount).toBe(2);
+    expect(fixture.native.visible.size).toBe(0);
+
+    fixture.coordinator.requestRefresh();
+    await fixture.coordinator.waitForIdle();
+    expect(fixture.resetNativeVisibility).toHaveBeenCalledTimes(2);
+  });
+
+  it('resets for itself when a toggle was in flight across a foreign return to multiple', async () => {
+    const native = nativeRepositories(['alpha', 'beta']);
+    let release: (() => void) | undefined;
+    const execute = vi.fn(async (command: string) => {
+      if (release === undefined) {
+        await new Promise<void>(resolve => { release = resolve; });
+      }
+      await native.execute(command);
+    });
+    const resetNativeVisibility = vi.fn(native.reset);
+    const reconciler = new VisibilityReconciler({ toggle: execute });
+    for (const repository of native.repositories) reconciler.setActionability(repository, clean);
+    const coordinator = new VisibilityMappingCoordinator({
+      filteringRequested: () => true,
+      getCommands: () => Promise.resolve(native.discoveryCommands),
+      getRepositories: () => native.repositories,
+      topologyReady: () => true,
+      resetNativeVisibility,
+      reconciler,
+      probeTimings: { selectionTimeoutMilliseconds: 20, totalTimeoutMilliseconds: 1_000 },
+      commandRetryMilliseconds: 0,
+      topologySettleMilliseconds: 0,
+    });
+
+    coordinator.requestRefresh();
+    await vi.waitFor(() => expect(release).toBeDefined());
+    expect(reconciler.toggling).toBe(true);
+    coordinator.acceptForeignReset();
+    release?.();
+    await coordinator.waitForIdle();
+    await reconciler.waitForIdle();
+
+    expect(resetNativeVisibility).toHaveBeenCalledTimes(2);
+    expect(coordinator.baselineEstablished).toBe(true);
+    expect(native.visible.size).toBe(0);
+  });
+
+  it('ends a pending settle wait and clears its timer when disposed', async () => {
+    vi.useFakeTimers();
+    try {
+      const native = nativeRepositories(['alpha', 'beta']);
+      const getCommands = vi.fn(() => Promise.resolve(native.discoveryCommands));
+      const coordinator = new VisibilityMappingCoordinator({
+        filteringRequested: () => true,
+        getCommands,
+        getRepositories: () => native.repositories,
+        topologyReady: () => true,
+        resetNativeVisibility: native.reset,
+        reconciler: new VisibilityReconciler({ toggle: native.execute }),
+        topologySettleMilliseconds: 60_000,
+      });
+
+      coordinator.requestRefresh();
+      coordinator.dispose();
+      await coordinator.waitForIdle();
+
+      expect(vi.getTimerCount()).toBe(0);
+      expect(getCommands).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
