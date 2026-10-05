@@ -5,6 +5,14 @@ export interface FilteringStateTransactionOptions {
   readonly publishContext: (enabled: boolean) => PromiseLike<void>;
 }
 
+/**
+ * Reads the stored filtering choice under the host-storage rule of
+ * store-recovery-conventions: a value that is not a boolean reads as the default.
+ */
+export function readStoredFilteringEnabled(stored: unknown): boolean {
+  return typeof stored === 'boolean' ? stored : true;
+}
+
 export class FilteringStateTransitionError extends Error {
   constructor(cause: unknown, readonly rollbackErrors: readonly unknown[]) {
     super(

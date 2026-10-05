@@ -5,6 +5,7 @@ import { createDiagnostics } from './diagnostics';
 import {
   FilteringStateTransaction,
   FilteringStateTransitionError,
+  readStoredFilteringEnabled,
 } from './filteringStateTransaction';
 import type { GitApi, GitExtension, GitRepository } from './gitApi';
 import { GitRepositoryMonitor } from './gitRepositoryMonitor';
@@ -122,7 +123,7 @@ async function start(
     },
   });
 
-  const initialFilteringEnabled = context.workspaceState.get(filteringStateKey, true);
+  const initialFilteringEnabled = readStoredFilteringEnabled(context.workspaceState.get<unknown>(filteringStateKey));
   await waitForHostOperation(
     Promise.resolve(vscode.commands.executeCommand('setContext', 'repofocus.compatible', true)),
     hostWriteTimeoutMilliseconds,

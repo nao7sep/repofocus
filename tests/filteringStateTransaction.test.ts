@@ -2,8 +2,19 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   FilteringStateTransaction,
   FilteringStateTransitionError,
+  readStoredFilteringEnabled,
 } from '../src/filteringStateTransaction';
 import { waitForHostOperation } from '../src/hostOperation';
+
+describe('readStoredFilteringEnabled', () => {
+  it.each([true, false])('keeps a stored boolean %s', stored => {
+    expect(readStoredFilteringEnabled(stored)).toBe(stored);
+  });
+
+  it.each([undefined, null, 'false', 0, 1, {}])('reads %j as the default, enabled', stored => {
+    expect(readStoredFilteringEnabled(stored)).toBe(true);
+  });
+});
 
 describe('FilteringStateTransaction', () => {
   it('publishes runtime state only after native, durable, and context projections agree', async () => {
