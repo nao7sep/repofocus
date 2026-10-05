@@ -24,6 +24,7 @@ describe('createDiagnostics', () => {
     const parsed = JSON.parse(diagnostics) as Record<string, unknown>;
 
     expect(parsed).toMatchObject({
+      formatVersion: 1,
       gitApiState: 'initialized',
       repositoryCount: 3,
       actionableRepositoryCount: 2,

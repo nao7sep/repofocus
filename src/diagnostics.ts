@@ -16,6 +16,8 @@ export interface RepoFocusDiagnosticsInput {
   readonly alwaysShowPatternCount: number;
 }
 
+const diagnosticsFormatVersion = 1;
+
 export function createDiagnostics(input: RepoFocusDiagnosticsInput): string {
   const reasonCounts: Partial<Record<ActionabilityReason['kind'], number>> = {};
   for (const state of input.repositoryStates) {
@@ -25,7 +27,7 @@ export function createDiagnostics(input: RepoFocusDiagnosticsInput): string {
   }
 
   return JSON.stringify({
-    schemaVersion: 1,
+    formatVersion: diagnosticsFormatVersion,
     extensionVersion: input.extensionVersion,
     vscodeVersion: input.vscodeVersion,
     platform: input.platform,
