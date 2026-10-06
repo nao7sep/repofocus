@@ -62,12 +62,12 @@ describe('matchesAlwaysShow', () => {
     expect(matches('company')).toBe(false);
   });
 
-  it('fails visible when synced configuration exceeds the pattern bounds', () => {
+  it('reads synced configuration beyond the pattern bounds as the empty built-in', () => {
     const tooMany = Array.from({ length: 101 }, (_, index) => `repo-${index}`);
     const tooLong = ['x'.repeat(513)];
 
-    expect(createAlwaysShowMatcher(tooMany)('unrelated')).toBe(true);
-    expect(createAlwaysShowMatcher(tooLong)('unrelated')).toBe(true);
+    expect(createAlwaysShowMatcher(tooMany)('repo-0')).toBe(false);
+    expect(createAlwaysShowMatcher(tooLong)('x'.repeat(513))).toBe(false);
   });
 
   it.each([
@@ -76,11 +76,11 @@ describe('matchesAlwaysShow', () => {
     { repository: 'repofocus' },
     [42],
     ['repofocus', null],
-  ])('fails visible for malformed host configuration: %j', value => {
+  ])('reads malformed host configuration as the empty built-in: %j', value => {
     const configuration = compileAlwaysShowConfiguration(value);
 
     expect(configuration.valid).toBe(false);
-    expect(configuration.matches('unrelated')).toBe(true);
+    expect(configuration.matches('repofocus')).toBe(false);
   });
 
   it.each(['win32', 'darwin'] as const)('ignores case on %s', platform => {

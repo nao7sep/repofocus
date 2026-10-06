@@ -54,8 +54,10 @@ export function compileAlwaysShowConfiguration(
   value: unknown,
   platform: NodeJS.Platform = process.platform,
 ): AlwaysShowConfiguration {
+  // An invalid set reads as its built-in per config-sets-conventions; the
+  // caller logs the warning.
   if (!Array.isArray(value)) {
-    return { patternCount: 0, matches: () => true, valid: false };
+    return { patternCount: 0, matches: () => false, valid: false };
   }
   const patterns = value as readonly unknown[];
   if (
@@ -64,10 +66,9 @@ export function compileAlwaysShowConfiguration(
       typeof pattern !== 'string' || pattern.length > MAX_ALWAYS_SHOW_PATTERN_LENGTH
     ))
   ) {
-    // Settings normally reject this shape. If a hand-edited or synced value
-    // bypasses validation, fail visible instead of compiling unbounded input or
-    // hiding repositories whose exemption could not be evaluated.
-    return { patternCount: patterns.length, matches: () => true, valid: false };
+    // Settings normally reject this shape, but a hand-edited or synced value can
+    // bypass validation; it is never compiled.
+    return { patternCount: patterns.length, matches: () => false, valid: false };
   }
   const validPatterns = patterns as readonly string[];
   // Brace expansion is not part of the documented pattern surface and can

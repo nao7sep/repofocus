@@ -82,7 +82,7 @@ async function start(
   const extensionVersion = typeof manifest.version === 'string' ? manifest.version : 'unknown';
 
   const actionability = new Map<string, RepositoryActionability>();
-  let alwaysShow = readAlwaysShowConfiguration();
+  let alwaysShow = readAlwaysShowConfiguration(logger);
   let compatibilityFailureReported = false;
 
   const reconciler = new VisibilityReconciler({
@@ -329,7 +329,7 @@ async function start(
     }),
     vscode.commands.registerCommand('repofocus.refresh', async () => {
       logger.info('Manual visibility refresh requested.');
-      alwaysShow = readAlwaysShowConfiguration();
+      alwaysShow = readAlwaysShowConfiguration(logger);
       evaluateAll();
       visibility.retryIfUnavailable();
       await waitForSettled();
@@ -337,7 +337,7 @@ async function start(
     vscode.commands.registerCommand('repofocus.copyDiagnostics', copyDiagnostics),
     vscode.workspace.onDidChangeConfiguration(event => {
       if (!event.affectsConfiguration('repofocus.alwaysShow')) return;
-      alwaysShow = readAlwaysShowConfiguration();
+      alwaysShow = readAlwaysShowConfiguration(logger);
       evaluateAll();
       logger.info('Always-show patterns changed.', {
         alwaysShowPatterns: alwaysShow.patternCount,
@@ -381,9 +381,15 @@ async function start(
   };
 }
 
-function readAlwaysShowConfiguration() {
+function readAlwaysShowConfiguration(logger: Logger) {
   const value = vscode.workspace.getConfiguration('repofocus').get<unknown>('alwaysShow', []);
-  return compileAlwaysShowConfiguration(value);
+  const configuration = compileAlwaysShowConfiguration(value);
+  if (!configuration.valid) {
+    logger.warn('The alwaysShow setting is invalid; it reads as its built-in empty list.', {
+      alwaysShowPatterns: configuration.patternCount,
+    });
+  }
+  return configuration;
 }
 
 export async function deactivate(): Promise<void> {
