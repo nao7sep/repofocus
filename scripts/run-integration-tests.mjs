@@ -9,44 +9,18 @@ const projectRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const extensionDevelopmentPath = resolve(
   process.env.REPOFOCUS_INTEGRATION_EXTENSION_PATH ?? projectRoot,
 );
-const fixtureRoot = await mkdtemp(join(tmpdir(), 'repofocus-integration-'));
-const remoteRoot = await mkdtemp(join(tmpdir(), 'repofocus-remotes-'));
-// The multi-root fixture's two folders must live under genuinely separate
-// parents — the point of the shape is that they share no common workspace root.
-const multiRootRoot = await mkdtemp(join(tmpdir(), 'repofocus-multiroot-'));
-const multiRootFirst = join(multiRootRoot, 'first-parent');
-const multiRootSecond = join(multiRootRoot, 'second-parent');
-const gitConfigRoot = await mkdtemp(join(tmpdir(), 'repofocus-git-'));
 const vscodeExecutablePath = process.env.VSCODE_EXECUTABLE_PATH;
 const vscodeVersion = process.env.REPOFOCUS_INTEGRATION_VSCODE_VERSION ?? '1.131.0';
-const repositoryCount = Number(process.env.REPOFOCUS_INTEGRATION_REPOSITORY_COUNT ?? '50');
+const temporaryRoots = [];
 
-if (!Number.isSafeInteger(repositoryCount) || repositoryCount < 4) {
-  throw new Error('REPOFOCUS_INTEGRATION_REPOSITORY_COUNT must be an integer of at least 4.');
-}
-
-// Every Git process below, the Extension Host and its built-in Git extension
-// inherit this environment, so the developer's global and system Git
-// configuration (hooks, signing, ignores, attributes) never applies. Git finds
-// these files through its own variables, on Windows as on macOS.
-const gitConfigPath = join(gitConfigRoot, 'config');
-process.env.GIT_CONFIG_GLOBAL = gitConfigPath;
-process.env.GIT_CONFIG_NOSYSTEM = '1';
-for (const [key, value] of [
-  ['user.name', 'RepoFocus Tests'],
-  ['user.email', 'repofocus-tests@example.invalid'],
-  ['core.excludesFile', join(gitConfigRoot, 'ignore')],
-  ['core.attributesFile', join(gitConfigRoot, 'attributes')],
-]) {
-  execFileSync('git', ['config', '--file', gitConfigPath, key, value], { stdio: 'ignore' });
+async function temporaryRoot(prefix) {
+  const path = await mkdtemp(join(tmpdir(), prefix));
+  temporaryRoots.push(path);
+  return path;
 }
 
 function git(repositoryPath, ...args) {
   execFileSync('git', args, { cwd: repositoryPath, stdio: 'ignore' });
-}
-
-async function createRepository(name) {
-  await createRepositoryAt(join(fixtureRoot, name));
 }
 
 async function createRepositoryAt(repositoryPath) {
@@ -59,10 +33,34 @@ async function createRepositoryAt(repositoryPath) {
 }
 
 try {
-  await createRepository('alpha');
-  await createRepository('beta');
+  const repositoryCount = Number(process.env.REPOFOCUS_INTEGRATION_REPOSITORY_COUNT ?? '50');
+  if (!Number.isSafeInteger(repositoryCount) || repositoryCount < 4) {
+    throw new Error('REPOFOCUS_INTEGRATION_REPOSITORY_COUNT must be an integer of at least 4.');
+  }
+
+  // Every Git process below, the Extension Host and its built-in Git extension
+  // inherit this environment, so the developer's global and system Git
+  // configuration (hooks, signing, ignores, attributes) never applies. Git finds
+  // these files through its own variables, on Windows as on macOS.
+  const gitConfigRoot = await temporaryRoot('repofocus-git-');
+  const gitConfigPath = join(gitConfigRoot, 'config');
+  process.env.GIT_CONFIG_GLOBAL = gitConfigPath;
+  process.env.GIT_CONFIG_NOSYSTEM = '1';
+  for (const [key, value] of [
+    ['user.name', 'RepoFocus Tests'],
+    ['user.email', 'repofocus-tests@example.invalid'],
+    ['core.excludesFile', join(gitConfigRoot, 'ignore')],
+    ['core.attributesFile', join(gitConfigRoot, 'attributes')],
+  ]) {
+    execFileSync('git', ['config', '--file', gitConfigPath, key, value], { stdio: 'ignore' });
+  }
+
+  const fixtureRoot = await temporaryRoot('repofocus-integration-');
+  const remoteRoot = await temporaryRoot('repofocus-remotes-');
+  await createRepositoryAt(join(fixtureRoot, 'alpha'));
+  await createRepositoryAt(join(fixtureRoot, 'beta'));
   for (let index = 3; index <= repositoryCount; index += 1) {
-    await createRepository(`repo-${String(index).padStart(2, '0')}`);
+    await createRepositoryAt(join(fixtureRoot, `repo-${String(index).padStart(2, '0')}`));
   }
   const alphaPath = join(fixtureRoot, 'alpha');
   const alphaRemotePath = join(remoteRoot, 'alpha.git');
@@ -86,6 +84,7 @@ try {
     },
     launchArgs: [
       fixtureRoot,
+      `--user-data-dir=${await temporaryRoot('repofocus-user-data-')}`,
       '--disable-workspace-trust',
       '--skip-welcome',
       '--skip-release-notes',
@@ -96,6 +95,11 @@ try {
   // name, in unrelated parent directories, opened as sibling workspace folders
   // through a .code-workspace file — the only way to put VS Code into a genuine
   // multi-root workspace, and the shape the single-folder run above cannot cover.
+  // The two folders live under genuinely separate parents: the point of the
+  // shape is that they share no common workspace root.
+  const multiRootRoot = await temporaryRoot('repofocus-multiroot-');
+  const multiRootFirst = join(multiRootRoot, 'first-parent');
+  const multiRootSecond = join(multiRootRoot, 'second-parent');
   const firstMultiRootFolder = join(multiRootFirst, 'shared');
   const secondMultiRootFolder = join(multiRootSecond, 'shared');
   await createRepositoryAt(firstMultiRootFolder);
@@ -117,14 +121,14 @@ try {
     },
     launchArgs: [
       workspaceFile,
+      `--user-data-dir=${await temporaryRoot('repofocus-user-data-')}`,
       '--disable-workspace-trust',
       '--skip-welcome',
       '--skip-release-notes',
     ],
   });
 } finally {
-  await rm(fixtureRoot, { recursive: true, force: true });
-  await rm(remoteRoot, { recursive: true, force: true });
-  await rm(multiRootRoot, { recursive: true, force: true });
-  await rm(gitConfigRoot, { recursive: true, force: true });
+  // runTests settles only once its Extension Host has exited, so no profile
+  // file is still open here, which matters on Windows.
+  for (const root of temporaryRoots) await rm(root, { recursive: true, force: true });
 }
