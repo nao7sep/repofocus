@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GitRepository } from '../src/gitApi';
 import {
   DEFAULT_SELECTION_TIMEOUT_MILLISECONDS,
@@ -66,28 +66,31 @@ const fastTimings = {
 } as const;
 
 describe('mapVisibilityCommandsInOrder', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('uses host-independent probe timeouts', () => {
     expect(DEFAULT_SELECTION_TIMEOUT_MILLISECONDS).toBe(10_000);
     expect(DEFAULT_TOTAL_PROBE_TIMEOUT_MILLISECONDS).toBe(120_000);
   });
 
   it('allows a slow native focus transfer to settle', async () => {
-    vi.useFakeTimers();
-    try {
-      const names = ['alpha', 'beta'];
-      const world = nativeWorld(names, names, 'beta', 5_000);
-      const mapping = mapVisibilityCommandsInOrder(
-        world.repositories,
-        world.commands,
-        world.ledger,
-      );
-      const result = expect(mapping).resolves.toHaveLength(2);
+    const names = ['alpha', 'beta'];
+    const world = nativeWorld(names, names, 'beta', 5_000);
+    const mapping = mapVisibilityCommandsInOrder(
+      world.repositories,
+      world.commands,
+      world.ledger,
+    );
+    const result = expect(mapping).resolves.toHaveLength(2);
 
-      await vi.advanceTimersByTimeAsync(5_000);
-      await result;
-    } finally {
-      vi.useRealTimers();
-    }
+    await vi.advanceTimersByTimeAsync(5_000);
+    await result;
   });
 
   it.each([2, 3, 50])('maps %i repositories with exactly 3N - 3 bounded toggles', async count => {
@@ -137,13 +140,15 @@ describe('mapVisibilityCommandsInOrder', () => {
       reveal: command => world.ledger.reveal(command),
     };
 
-    await expect(mapVisibilityCommandsInOrder(
+    const result = expect(mapVisibilityCommandsInOrder(
       world.repositories,
       world.commands,
       ledger,
       fastTimings,
     )).rejects.toBeInstanceOf(VisibilityProbeError);
 
+    await vi.advanceTimersByTimeAsync(fastTimings.selectionTimeoutMilliseconds);
+    await result;
     expect(hideCount).toBe(3);
     expect(world.executed).toEqual([
       'hide:toggle.scm0',
@@ -173,18 +178,22 @@ describe('mapVisibilityCommandsInOrder', () => {
       reveal: vi.fn(() => Promise.resolve()),
     };
 
-    await expect(mapVisibilityCommandsInOrder(
+    const noneResult = expect(mapVisibilityCommandsInOrder(
       none,
       ['toggle.scm0', 'toggle.scm1'],
       ledger,
       fastTimings,
     )).rejects.toThrow('focus did not settle');
-    await expect(mapVisibilityCommandsInOrder(
+    await vi.advanceTimersByTimeAsync(fastTimings.selectionTimeoutMilliseconds);
+    await noneResult;
+    const bothResult = expect(mapVisibilityCommandsInOrder(
       both,
       ['toggle.scm0', 'toggle.scm1'],
       ledger,
       fastTimings,
     )).rejects.toThrow('focus did not settle');
+    await vi.advanceTimersByTimeAsync(fastTimings.selectionTimeoutMilliseconds);
+    await bothResult;
     expect(ledger.hide).toHaveBeenCalledTimes(2);
   });
 
@@ -209,25 +218,20 @@ describe('mapVisibilityCommandsInOrder', () => {
   });
 
   it('bounds the total time spent waiting for native focus', async () => {
-    vi.useFakeTimers();
-    try {
-      const repositories = [repository('alpha', () => false), repository('beta', () => false)];
-      const ledger: VisibilityProbeLedger = {
-        hide: vi.fn(() => Promise.resolve()),
-        reveal: vi.fn(() => Promise.resolve()),
-      };
-      const mapping = mapVisibilityCommandsInOrder(
-        repositories,
-        ['toggle.scm0', 'toggle.scm1'],
-        ledger,
-        { selectionTimeoutMilliseconds: 1_000, totalTimeoutMilliseconds: 20 },
-      );
-      const result = expect(mapping).rejects.toBeInstanceOf(VisibilityProbeLimitError);
+    const repositories = [repository('alpha', () => false), repository('beta', () => false)];
+    const ledger: VisibilityProbeLedger = {
+      hide: vi.fn(() => Promise.resolve()),
+      reveal: vi.fn(() => Promise.resolve()),
+    };
+    const mapping = mapVisibilityCommandsInOrder(
+      repositories,
+      ['toggle.scm0', 'toggle.scm1'],
+      ledger,
+      { selectionTimeoutMilliseconds: 1_000, totalTimeoutMilliseconds: 20 },
+    );
+    const result = expect(mapping).rejects.toBeInstanceOf(VisibilityProbeLimitError);
 
-      await vi.advanceTimersByTimeAsync(30);
-      await result;
-    } finally {
-      vi.useRealTimers();
-    }
+    await vi.advanceTimersByTimeAsync(30);
+    await result;
   });
 });

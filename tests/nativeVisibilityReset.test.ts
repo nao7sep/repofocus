@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EventLike } from '../src/gitApi';
 import {
   NativeVisibilityResetter,
@@ -23,6 +23,14 @@ function modeEvent(): {
 }
 
 describe('resetNativeRepositoryVisibility', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('waits for both configuration transitions and restores multiple mode', async () => {
     const changed = modeEvent();
     let mode = 'multiple';
@@ -34,13 +42,15 @@ describe('resetNativeRepositoryVisibility', () => {
       }, 5);
     });
 
-    await resetNativeRepositoryVisibility({
+    const reset = resetNativeRepositoryVisibility({
       executeCommand,
       getSelectionMode: () => mode,
       onDidChangeSelectionMode: changed.event,
       timeoutMilliseconds: 100,
     });
 
+    await vi.advanceTimersByTimeAsync(10);
+    await reset;
     expect(executeCommand.mock.calls).toEqual([
       [selectionModeCommands.single],
       [selectionModeCommands.multiple],
@@ -52,13 +62,15 @@ describe('resetNativeRepositoryVisibility', () => {
   it('fails within the bound when VS Code never reports the requested mode', async () => {
     const changed = modeEvent();
 
-    await expect(resetNativeRepositoryVisibility({
+    const result = expect(resetNativeRepositoryVisibility({
       executeCommand: async () => {},
       getSelectionMode: () => 'multiple',
       onDidChangeSelectionMode: changed.event,
       timeoutMilliseconds: 10,
     })).rejects.toThrow('did not enter repository selection mode "single"');
 
+    await vi.advanceTimersByTimeAsync(10);
+    await result;
     expect(changed.listenerCount()).toBe(0);
   });
 
@@ -89,7 +101,6 @@ describe('resetNativeRepositoryVisibility', () => {
   });
 
   it('shares one timeout across both selection-mode transitions', async () => {
-    vi.useFakeTimers();
     const changed = modeEvent();
     let mode = 'multiple';
     const executeCommand = vi.fn(async (command: string) => {
@@ -112,7 +123,6 @@ describe('resetNativeRepositoryVisibility', () => {
     await vi.advanceTimersByTimeAsync(110);
     await result;
     expect(executeCommand).toHaveBeenCalledTimes(2);
-    vi.useRealTimers();
   });
 });
 

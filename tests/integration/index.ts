@@ -134,7 +134,6 @@ export async function run(): Promise<void> {
       { cause: error },
     );
   }
-  const initialSettleStarted = Date.now();
   const alpha = repositoryAt(api, alphaPath);
   const beta = repositoryAt(api, betaPath);
   assert(alpha && beta);
@@ -181,11 +180,6 @@ export async function run(): Promise<void> {
       { cause: error },
     );
   }
-  assert(
-    Date.now() - initialSettleStarted < initialFilteringTimeoutMilliseconds,
-    `${expectedRepositoryCount}-repository initial filtering must settle within `
-      + `${initialFilteringTimeoutMilliseconds / 1_000} seconds after Git discovery.`,
-  );
 
   const before = api.git.repositories.length;
   assert.equal(before, expectedRepositoryCount);

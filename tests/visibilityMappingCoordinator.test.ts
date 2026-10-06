@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RepositoryActionability } from '../src/actionability';
 import type { GitRepository } from '../src/gitApi';
 import { selectionModeCommands, visibilityCommandPrefix } from '../src/visibilityCommandResolver';
@@ -83,6 +83,14 @@ function coordinatorFixture(names: readonly string[]) {
 }
 
 describe('VisibilityMappingCoordinator', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('keeps a single repository visible without reading or mutating native visibility', async () => {
     const fixture = coordinatorFixture(['alpha']);
 
@@ -162,17 +170,18 @@ describe('VisibilityMappingCoordinator', () => {
       reconciler,
       commandRetryAttempts: 3,
       commandRetryMilliseconds: 0,
-      commandUnavailableRetryMilliseconds: 1,
+      commandUnavailableRetryMilliseconds: 1_000,
       topologySettleMilliseconds: 0,
     });
 
     coordinator.requestRefresh();
+    await vi.advanceTimersByTimeAsync(10);
     await coordinator.waitForIdle();
     expect(getCommands).toHaveBeenCalledTimes(3);
     expect(coordinator.mappingState).toBe('awaiting-native-commands');
 
     commandsReady = true;
-    await new Promise(resolve => setTimeout(resolve, 5));
+    await vi.advanceTimersByTimeAsync(1_000);
     await coordinator.waitForIdle();
     expect(coordinator.baselineEstablished).toBe(true);
     expect(getCommands).toHaveBeenCalledTimes(4);
@@ -202,6 +211,7 @@ describe('VisibilityMappingCoordinator', () => {
     });
 
     coordinator.requestRefresh();
+    await vi.advanceTimersByTimeAsync(10);
     await coordinator.waitForIdle();
 
     expect(getCommands).toHaveBeenCalledOnce();
@@ -211,7 +221,7 @@ describe('VisibilityMappingCoordinator', () => {
 
     // Let the scheduled retry attach to the still-running operation, then
     // settle that original call. No rival getCommands() invocation is started.
-    await new Promise(resolve => setTimeout(resolve, 5));
+    await vi.advanceTimersByTimeAsync(1);
     resolveCommands(native.discoveryCommands);
     await coordinator.waitForIdle();
 
@@ -314,8 +324,13 @@ describe('VisibilityMappingCoordinator', () => {
   it('returns from updateFiltering at once while a mapping probe is still in flight', async () => {
     const native = nativeRepositories(['alpha', 'beta']);
     let resolveCommands!: (commands: readonly string[]) => void;
+    let markStarted!: () => void;
     const gate = new Promise<readonly string[]>(resolve => { resolveCommands = resolve; });
-    const getCommands = vi.fn(() => gate);
+    const started = new Promise<void>(resolve => { markStarted = resolve; });
+    const getCommands = vi.fn(() => {
+      markStarted();
+      return gate;
+    });
     const execute = vi.fn(native.execute);
     const resetNativeVisibility = vi.fn(native.reset);
     const reconciler = new VisibilityReconciler({ toggle: execute });
@@ -332,14 +347,14 @@ describe('VisibilityMappingCoordinator', () => {
     });
 
     coordinator.requestRefresh();
-    await new Promise(resolve => setTimeout(resolve, 5));
-    expect(getCommands).toHaveBeenCalled();
+    await started;
     expect(coordinator.baselineEstablished).toBe(false);
 
     filteringRequested = false;
     let settled = false;
     void coordinator.updateFiltering(false).then(() => { settled = true; });
-    await new Promise(resolve => setTimeout(resolve, 5));
+    // Drains pending promise callbacks without moving the pinned clock.
+    await vi.advanceTimersByTimeAsync(0);
     expect(settled).toBe(true);
     expect(coordinator.baselineEstablished).toBe(false);
 
@@ -461,6 +476,7 @@ describe('VisibilityMappingCoordinator', () => {
     });
 
     coordinator.requestRefresh();
+    await vi.advanceTimersByTimeAsync(20);
     await coordinator.waitForIdle();
 
     expect(reconciler.compatible).toBe(false);
@@ -576,28 +592,23 @@ describe('VisibilityMappingCoordinator', () => {
   });
 
   it('ends a pending settle wait and clears its timer when disposed', async () => {
-    vi.useFakeTimers();
-    try {
-      const native = nativeRepositories(['alpha', 'beta']);
-      const getCommands = vi.fn(() => Promise.resolve(native.discoveryCommands));
-      const coordinator = new VisibilityMappingCoordinator({
-        filteringRequested: () => true,
-        getCommands,
-        getRepositories: () => native.repositories,
-        topologyReady: () => true,
-        resetNativeVisibility: native.reset,
-        reconciler: new VisibilityReconciler({ toggle: native.execute }),
-        topologySettleMilliseconds: 60_000,
-      });
+    const native = nativeRepositories(['alpha', 'beta']);
+    const getCommands = vi.fn(() => Promise.resolve(native.discoveryCommands));
+    const coordinator = new VisibilityMappingCoordinator({
+      filteringRequested: () => true,
+      getCommands,
+      getRepositories: () => native.repositories,
+      topologyReady: () => true,
+      resetNativeVisibility: native.reset,
+      reconciler: new VisibilityReconciler({ toggle: native.execute }),
+      topologySettleMilliseconds: 60_000,
+    });
 
-      coordinator.requestRefresh();
-      coordinator.dispose();
-      await coordinator.waitForIdle();
+    coordinator.requestRefresh();
+    coordinator.dispose();
+    await coordinator.waitForIdle();
 
-      expect(vi.getTimerCount()).toBe(0);
-      expect(getCommands).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(vi.getTimerCount()).toBe(0);
+    expect(getCommands).not.toHaveBeenCalled();
   });
 });
