@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A malformed synced or hand-edited `alwaysShow` setting now reads as its built-in empty list, matching no repository, and logs a warning, instead of keeping every repository visible.
 
+### Fixed
+
+- When RepoFocus is disabled or uninstalled and re-showing one hidden repository fails, it still re-shows every other repository before resetting the view to all-visible, and its stop log reports what failed instead of a clean stop.
+
 ## [0.1.3] - 2026-08-25
 
 ### Changed

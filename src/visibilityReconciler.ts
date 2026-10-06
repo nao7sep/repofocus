@@ -8,6 +8,13 @@ export interface VisibilityFailure {
   readonly strandedCommandCount: number;
 }
 
+export interface ShutdownResult {
+  /** Hidden commands whose re-show failed during this shutdown. */
+  readonly failedCommands: readonly string[];
+  /** No all-visible reset succeeded after a failed toggle, so native visibility is unknown. */
+  readonly resetFailed: boolean;
+}
+
 export interface VisibilityReconcilerOptions {
   readonly toggle: ToggleVisibility;
   /** Re-establishes a known all-visible state without relying on another toggle. */
@@ -42,7 +49,7 @@ export class VisibilityReconciler {
   private paused = false;
   private requested = false;
   private scheduled = false;
-  private ambiguousRecovery: Promise<void> | undefined;
+  private ambiguousRecovery: Promise<boolean> | undefined;
   private queue: Promise<void> = Promise.resolve();
   private pendingToggles = 0;
 
@@ -184,15 +191,17 @@ export class VisibilityReconciler {
     return this.queue;
   }
 
-  async shutdown(): Promise<void> {
-    if (this.state === 'disposed') return;
+  /** Only the first call restores visibility; later calls report nothing. */
+  async shutdown(): Promise<ShutdownResult> {
+    if (this.state === 'disposed') return { failedCommands: [], resetFailed: false };
     this.state = 'disposed';
     this.paused = false;
     this.requested = false;
     await this.queue;
-    await this.restoreOwnedCommands();
+    const result = await this.restoreEveryOwnedCommand();
     this.actionability.clear();
     this.mappings.clear();
+    return result;
   }
 
   private async toggle(command: string): Promise<void> {
@@ -242,7 +251,7 @@ export class VisibilityReconciler {
     }
   }
 
-  private failAmbiguousToggle(error: unknown): Promise<void> {
+  private failAmbiguousToggle(error: unknown): Promise<boolean> {
     if (this.ambiguousRecovery) return this.ambiguousRecovery;
     if (this.state === 'active') {
       this.state = 'failed';
@@ -254,12 +263,14 @@ export class VisibilityReconciler {
     return recovery;
   }
 
-  private async resetAfterAmbiguousToggle(): Promise<void> {
-    if (!this.options.resetToAllVisible) return;
+  /** Resolves whether the all-visible baseline was established. */
+  private async resetAfterAmbiguousToggle(): Promise<boolean> {
+    if (!this.options.resetToAllVisible) return false;
     try {
       await this.options.resetToAllVisible();
       this.hiddenCommands.clear();
       this.mappings.clear();
+      return true;
     } catch (error) {
       this.options.onError?.(
         new Error('Failed to establish an all-visible baseline after an ambiguous native toggle.', {
@@ -267,6 +278,7 @@ export class VisibilityReconciler {
         }),
         { strandedCommandCount: this.hiddenCommands.size },
       );
+      return false;
     }
   }
 
@@ -283,5 +295,30 @@ export class VisibilityReconciler {
         return;
       }
     }
+  }
+
+  /**
+   * Shutdown is the last chance to re-show anything, so one failed re-show
+   * does not abandon the other repositories: each command is a different
+   * repository and keeps its own bound. Any failure leaves the ledger unsafe,
+   * so the one all-visible reset follows.
+   */
+  private async restoreEveryOwnedCommand(): Promise<ShutdownResult> {
+    if (this.ambiguousRecovery) {
+      return { failedCommands: [], resetFailed: !(await this.ambiguousRecovery) };
+    }
+    const failedCommands: string[] = [];
+    for (const command of [...this.hiddenCommands]) {
+      try {
+        await this.toggle(command);
+        this.hiddenCommands.delete(command);
+      } catch (error) {
+        failedCommands.push(command);
+        this.options.onError?.(asError(error), { strandedCommandCount: this.hiddenCommands.size });
+      }
+    }
+    if (failedCommands.length === 0) return { failedCommands, resetFailed: false };
+    this.ambiguousRecovery = this.resetAfterAmbiguousToggle();
+    return { failedCommands, resetFailed: !(await this.ambiguousRecovery) };
   }
 }

@@ -362,10 +362,14 @@ async function start(
       nativeVisibilityResetter.dispose();
       visibility.dispose();
       await visibility.waitForIdle();
-      await reconciler.shutdown();
+      const { failedCommands, resetFailed } = await reconciler.shutdown();
       nativeVisibilityCommands.dispose();
       actionability.clear();
-      logger.info('RepoFocus stopped.', { clean: true });
+      if (failedCommands.length === 0 && !resetFailed) {
+        logger.info('RepoFocus stopped.', { clean: true });
+      } else {
+        logger.warn('RepoFocus stopped.', { clean: false, failedCommands, resetFailed });
+      }
     })();
     return shutdownPromise;
   };

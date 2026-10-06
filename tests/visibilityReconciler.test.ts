@@ -1,5 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RepositoryActionability } from '../src/actionability';
+import {
+  NativeVisibilityCommandExecutor,
+  NativeVisibilityCommandBusyError,
+  NativeVisibilityCommandTimeoutError,
+} from '../src/nativeVisibilityCommandExecutor';
 import type { RepositoryIdentity, VisibilityMapping } from '../src/visibilityCommandResolver';
 import { VisibilityReconciler } from '../src/visibilityReconciler';
 
@@ -224,7 +229,7 @@ describe('VisibilityReconciler', () => {
     reconciler.setActionability(beta, clean);
     await reconciler.waitForIdle();
 
-    await reconciler.shutdown();
+    await expect(reconciler.shutdown()).resolves.toEqual({ failedCommands: [], resetFailed: false });
     await reconciler.shutdown();
 
     expect(toggle.mock.calls).toEqual([
@@ -343,5 +348,98 @@ describe('VisibilityReconciler', () => {
     expect(reconciler.isHiddenByRepoFocus(alpha)).toBe(true);
     expect(toggle).toHaveBeenCalledTimes(2);
     expect(resetToAllVisible).toHaveBeenCalledOnce();
+  });
+
+  describe('shutdown after a failed re-show', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    async function hideAll(reconciler: VisibilityReconciler, names: readonly string[]): Promise<void> {
+      const repositories = names.map(repository);
+      await reconciler.setFilteringEnabled(true);
+      reconciler.setMappings(repositories.map((target, index) => mapping(target, `toggle.${names[index]}`)));
+      for (const target of repositories) reconciler.setActionability(target, clean);
+      await reconciler.waitForIdle();
+    }
+
+    it('re-shows every other repository, then takes the all-visible reset once', async () => {
+      const failure = new Error('native command failed');
+      const events: string[] = [];
+      let shuttingDown = false;
+      const toggle = vi.fn(async (command: string) => {
+        events.push(command);
+        if (shuttingDown && command === 'toggle.beta') throw failure;
+      });
+      const resetToAllVisible = vi.fn(async () => { events.push('reset'); });
+      const onError = vi.fn();
+      const reconciler = new VisibilityReconciler({ toggle, resetToAllVisible, onError });
+      await hideAll(reconciler, ['alpha', 'beta', 'gamma']);
+      events.length = 0;
+
+      shuttingDown = true;
+      const result = await reconciler.shutdown();
+
+      expect(events).toEqual(['toggle.alpha', 'toggle.beta', 'toggle.gamma', 'reset']);
+      expect(result).toEqual({ failedCommands: ['toggle.beta'], resetFailed: false });
+      expect(onError).toHaveBeenCalledOnce();
+      expect(onError.mock.calls[0][0]).toBe(failure);
+      expect(reconciler.hiddenRepositoryCount).toBe(0);
+    });
+
+    it('reports every failed re-show and a failed reset', async () => {
+      const resetFailure = new Error('reset failed');
+      let shuttingDown = false;
+      const toggle = vi.fn(async (command: string) => {
+        if (shuttingDown && command !== 'toggle.beta') throw new Error(`${command} failed`);
+      });
+      const resetToAllVisible = vi.fn().mockRejectedValue(resetFailure);
+      const onError = vi.fn();
+      const reconciler = new VisibilityReconciler({ toggle, resetToAllVisible, onError });
+      await hideAll(reconciler, ['alpha', 'beta', 'gamma']);
+
+      shuttingDown = true;
+      const result = await reconciler.shutdown();
+
+      expect(toggle).toHaveBeenCalledTimes(6);
+      expect(result).toEqual({ failedCommands: ['toggle.alpha', 'toggle.gamma'], resetFailed: true });
+      expect(resetToAllVisible).toHaveBeenCalledOnce();
+      expect(onError).toHaveBeenCalledTimes(3);
+      expect(onError.mock.calls[2][0].cause).toBe(resetFailure);
+      expect(reconciler.hiddenRepositoryCount).toBe(2);
+    });
+
+    it('keeps each re-show within its own bound and still tries the rest', async () => {
+      let shuttingDown = false;
+      const execute = vi.fn((_command: string) =>
+        shuttingDown ? new Promise<void>(() => {}) : Promise.resolve());
+      const executor = new NativeVisibilityCommandExecutor({ execute, timeoutMilliseconds: 10 });
+      const onError = vi.fn();
+      const resetToAllVisible = vi.fn(() => executor.waitForIdle(10));
+      const reconciler = new VisibilityReconciler({
+        toggle: command => executor.execute(command),
+        resetToAllVisible,
+        onError,
+      });
+      await hideAll(reconciler, ['alpha', 'beta']);
+
+      shuttingDown = true;
+      const shutdown = reconciler.shutdown();
+      await vi.advanceTimersByTimeAsync(20);
+      const result = await shutdown;
+
+      // The never-settling alpha re-show times out; beta is still tried and
+      // refused rather than queued behind it, and no command is retried.
+      expect(execute.mock.calls.slice(2)).toEqual([['toggle.alpha']]);
+      expect(onError.mock.calls[0][0]).toBeInstanceOf(NativeVisibilityCommandTimeoutError);
+      expect(onError.mock.calls[1][0]).toBeInstanceOf(NativeVisibilityCommandBusyError);
+      expect(resetToAllVisible).toHaveBeenCalledOnce();
+      expect(result).toEqual({ failedCommands: ['toggle.alpha', 'toggle.beta'], resetFailed: true });
+      executor.dispose();
+    });
   });
 });
