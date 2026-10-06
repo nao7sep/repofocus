@@ -16,12 +16,29 @@ const remoteRoot = await mkdtemp(join(tmpdir(), 'repofocus-remotes-'));
 const multiRootRoot = await mkdtemp(join(tmpdir(), 'repofocus-multiroot-'));
 const multiRootFirst = join(multiRootRoot, 'first-parent');
 const multiRootSecond = join(multiRootRoot, 'second-parent');
+const gitConfigRoot = await mkdtemp(join(tmpdir(), 'repofocus-git-'));
 const vscodeExecutablePath = process.env.VSCODE_EXECUTABLE_PATH;
 const vscodeVersion = process.env.REPOFOCUS_INTEGRATION_VSCODE_VERSION ?? '1.131.0';
 const repositoryCount = Number(process.env.REPOFOCUS_INTEGRATION_REPOSITORY_COUNT ?? '50');
 
 if (!Number.isSafeInteger(repositoryCount) || repositoryCount < 4) {
   throw new Error('REPOFOCUS_INTEGRATION_REPOSITORY_COUNT must be an integer of at least 4.');
+}
+
+// Every Git process below, the Extension Host and its built-in Git extension
+// inherit this environment, so the developer's global and system Git
+// configuration (hooks, signing, ignores, attributes) never applies. Git finds
+// these files through its own variables, on Windows as on macOS.
+const gitConfigPath = join(gitConfigRoot, 'config');
+process.env.GIT_CONFIG_GLOBAL = gitConfigPath;
+process.env.GIT_CONFIG_NOSYSTEM = '1';
+for (const [key, value] of [
+  ['user.name', 'RepoFocus Tests'],
+  ['user.email', 'repofocus-tests@example.invalid'],
+  ['core.excludesFile', join(gitConfigRoot, 'ignore')],
+  ['core.attributesFile', join(gitConfigRoot, 'attributes')],
+]) {
+  execFileSync('git', ['config', '--file', gitConfigPath, key, value], { stdio: 'ignore' });
 }
 
 function git(repositoryPath, ...args) {
@@ -36,8 +53,6 @@ async function createRepositoryAt(repositoryPath) {
   const name = repositoryPath.split('/').pop();
   await mkdir(repositoryPath, { recursive: true });
   git(repositoryPath, 'init', '-b', 'main');
-  git(repositoryPath, 'config', 'user.name', 'RepoFocus Tests');
-  git(repositoryPath, 'config', 'user.email', 'repofocus-tests@example.invalid');
   await writeFile(join(repositoryPath, 'tracked.txt'), `${name}\n`, 'utf8');
   git(repositoryPath, 'add', 'tracked.txt');
   git(repositoryPath, 'commit', '-m', 'fixture');
@@ -58,8 +73,6 @@ try {
   git(alphaPath, 'push', '--set-upstream', 'origin', 'main');
   git(alphaRemotePath, 'symbolic-ref', 'HEAD', 'refs/heads/main');
   execFileSync('git', ['clone', alphaRemotePath, alphaUpdaterPath], { stdio: 'ignore' });
-  git(alphaUpdaterPath, 'config', 'user.name', 'RepoFocus Tests');
-  git(alphaUpdaterPath, 'config', 'user.email', 'repofocus-tests@example.invalid');
 
   await runTests({
     ...(vscodeExecutablePath ? { vscodeExecutablePath } : { version: vscodeVersion }),
@@ -113,4 +126,5 @@ try {
   await rm(fixtureRoot, { recursive: true, force: true });
   await rm(remoteRoot, { recursive: true, force: true });
   await rm(multiRootRoot, { recursive: true, force: true });
+  await rm(gitConfigRoot, { recursive: true, force: true });
 }
