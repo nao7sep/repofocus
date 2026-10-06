@@ -61,9 +61,9 @@ If VS Code's internal behavior no longer matches the validated contract, RepoFoc
 
 RepoFocus owns native repository visibility while filtering is active. Do not also hide repositories with VS Code's native menu; turn RepoFocus filtering off first if you want manual control. A repository-topology change or **RepoFocus: Refresh** from a paused state establishes a fresh all-visible baseline and intentionally discards prior manual visibility choices.
 
-VS Code has no direct all-visible operation, so each visibility reset briefly sets `scm.repositories.selectionMode` to `single` in your user settings and then back to `multiple`. Settings Sync sees that change, and every open VS Code window follows it, which resets hand-chosen repository visibility in those windows too. A window running RepoFocus takes another window's reset as its new all-visible baseline and filters again without a reset of its own, so open windows do not keep resetting one another.
+VS Code has no direct all-visible operation, so each visibility reset briefly sets `scm.repositories.selectionMode` to `single` and then back to `multiple`, in your user settings or, when a workspace sets that value itself, in its `.vscode/settings.json` or `.code-workspace` file. Settings Sync sees a user-settings change, and every open VS Code window without its own workspace value follows it, which resets hand-chosen repository visibility in those windows too. A window running RepoFocus takes another window's reset as its new all-visible baseline and filters again without a reset of its own, so open windows do not keep resetting one another.
 
-RepoFocus reads only the branch, upstream, ahead/behind, rebase, and change-count state exposed by VS Code's built-in Git extension. It stores the filtering choice in per-workspace extension storage, writes no repository files, holds no credentials, and writes aggregate diagnostics to the clipboard only when requested.
+RepoFocus reads only the branch, upstream, ahead/behind, rebase, and change-count state exposed by VS Code's built-in Git extension. It stores the filtering choice in per-workspace extension storage, writes no repository files other than that workspace selection-mode value, holds no credentials, and writes aggregate diagnostics to the clipboard only when requested.
 
 ## Recovery
 

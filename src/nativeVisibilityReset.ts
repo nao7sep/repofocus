@@ -117,6 +117,10 @@ async function setSelectionMode(
         `VS Code did not enter repository selection mode "${mode}" within `
         + `${timeoutMilliseconds} milliseconds.`,
       )), timeoutMilliseconds);
+      // VS Code writes this mode to the user settings, or to a workspace's
+      // settings file when that workspace sets scm.repositories.selectionMode
+      // itself. The developer accepted that write: VS Code offers no
+      // setting-free way to reach a known all-visible state.
       options.executeCommand(selectionModeCommands[mode]).then(check, finish);
     });
   } finally {

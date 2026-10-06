@@ -501,19 +501,19 @@ export async function run(): Promise<void> {
   assert.equal(api.isHiddenByRepoFocus(reopenedAlpha), true, 'The clean repository must hide when filtering resumes.');
   assert.equal(api.isHiddenByRepoFocus(beta), false, 'The actionable repository must remain visible when filtering resumes.');
 
-  // The headline safety property: RepoFocus reaches and keeps a filtered view
-  // without ever writing VS Code's own configuration.
+  // Every reset in this run returned the selection mode to its default, so no
+  // user or workspace value for it remains.
   const selectionMode = vscode.workspace.getConfiguration('scm')
     .inspect<string>('repositories.selectionMode');
   assert.equal(
     selectionMode?.globalValue,
     undefined,
-    'RepoFocus must never write scm.repositories.selectionMode to user settings.',
+    'Visibility resets must leave no user value for scm.repositories.selectionMode.',
   );
   assert.equal(
     selectionMode?.workspaceValue,
     undefined,
-    'RepoFocus must never write scm.repositories.selectionMode to workspace settings.',
+    'Visibility resets must leave no workspace value for scm.repositories.selectionMode.',
   );
 
   await api.shutdown();
