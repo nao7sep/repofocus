@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   NativeVisibilityCommandBusyError,
   NativeVisibilityCommandExecutor,
@@ -13,6 +13,7 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 describe('NativeVisibilityCommandExecutor', () => {
+  afterEach(() => vi.useRealTimers());
   it('times out a native command and refuses overlap until it actually settles', async () => {
     const gate = deferred();
     const execute = vi.fn(() => gate.promise);
@@ -40,7 +41,6 @@ describe('NativeVisibilityCommandExecutor', () => {
     await executor.execute('toggle.alpha');
     expect(vi.getTimerCount()).toBe(0);
     executor.dispose();
-    vi.useRealTimers();
   });
 
   it('waits for a timed-out command to settle without starting another command', async () => {
@@ -75,7 +75,6 @@ describe('NativeVisibilityCommandExecutor', () => {
     await idleResult;
 
     executor.dispose();
-    vi.useRealTimers();
   });
 
   it('rejects new commands after disposal', async () => {

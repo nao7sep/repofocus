@@ -427,6 +427,45 @@ describe('VisibilityMappingCoordinator', () => {
     expect(coordinator.baselineEstablished).toBe(true);
   });
 
+  it('keeps a newer foreign all-visible hint when an older reset finishes', async () => {
+    const fixture = coordinatorFixture(['alpha', 'beta']);
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const resetNativeVisibility = vi.fn(async () => {
+      await gate;
+      await fixture.native.reset();
+    });
+    const coordinator = new VisibilityMappingCoordinator({
+      filteringRequested: () => true,
+      getCommands: fixture.getCommands,
+      getRepositories: () => fixture.native.repositories,
+      topologyReady: () => true,
+      resetNativeVisibility,
+      reconciler: fixture.reconciler,
+      topologySettleMilliseconds: 0,
+    });
+    try {
+      coordinator.requestRefresh();
+      await vi.waitFor(() => expect(resetNativeVisibility).toHaveBeenCalledOnce());
+      await fixture.native.reset();
+      coordinator.acceptForeignReset();
+      release();
+      await coordinator.waitForIdle();
+      await fixture.reconciler.waitForIdle();
+
+      expect(resetNativeVisibility).toHaveBeenCalledOnce();
+      expect(coordinator.baselineEstablished).toBe(true);
+      expect(fixture.native.visible.size).toBe(0);
+      expect(fixture.reconciler.hiddenRepositoryCount).toBe(2);
+    } finally {
+      coordinator.dispose();
+      release();
+      await coordinator.waitForIdle();
+      await fixture.reconciler.shutdown();
+      fixture.coordinator.dispose();
+    }
+  });
+
   it('fails compatibility without hiding anything when the native reset fails', async () => {
     const native = nativeRepositories(['alpha', 'beta']);
     const failure = new Error('native reset failed');

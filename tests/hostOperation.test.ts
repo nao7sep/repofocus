@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   HostOperationTimeoutError,
   NonOverlappingHostOperation,
@@ -12,6 +12,7 @@ function deferred<T>() {
 }
 
 describe('host operations', () => {
+  afterEach(() => vi.useRealTimers());
   it('times out dependency activation without starting a second activation', async () => {
     const gate = deferred<string>();
     const start = vi.fn(() => gate.promise);
@@ -45,6 +46,5 @@ describe('host operations', () => {
     const activation = new OneShotHostOperation<string>();
     await activation.wait(() => Promise.resolve('ready'), 50_000, 'Git activation');
     expect(vi.getTimerCount()).toBe(0);
-    vi.useRealTimers();
   });
 });

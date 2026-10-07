@@ -76,18 +76,22 @@ export class NativeVisibilityCommandExecutor {
    * retrying anything. Recovery uses this after a caller-facing timeout so it
    * can establish a known baseline only after the ambiguous operation ends.
    */
-  async waitForIdle(timeoutMilliseconds: number): Promise<void> {
+  async waitForIdle(timeoutMilliseconds: number, signal?: AbortSignal): Promise<void> {
     if (!Number.isSafeInteger(timeoutMilliseconds) || timeoutMilliseconds < 1) {
       throw new Error('Native visibility idle timeout must be a positive safe integer.');
     }
     const active = this.active;
     if (!active) return;
+    if (signal?.aborted) throw new Error('Native visibility command wait was cancelled.');
 
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let abort: (() => void) | undefined;
     try {
       await Promise.race([
         active.catch(() => undefined),
         new Promise<never>((_resolve, reject) => {
+          abort = () => reject(new Error('Native visibility command wait was cancelled.'));
+          signal?.addEventListener('abort', abort, { once: true });
           timer = setTimeout(() => reject(
             new NativeVisibilityCommandIdleTimeoutError(timeoutMilliseconds),
           ), timeoutMilliseconds);
@@ -95,6 +99,7 @@ export class NativeVisibilityCommandExecutor {
       ]);
     } finally {
       if (timer !== undefined) clearTimeout(timer);
+      if (abort) signal?.removeEventListener('abort', abort);
     }
   }
 

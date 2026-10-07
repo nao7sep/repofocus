@@ -250,7 +250,7 @@ export class VisibilityMappingCoordinator {
 
     try {
       if (!this.nativeAllVisible) await this.options.resetNativeVisibility();
-      this.nativeAllVisible = false;
+      if (revision === this.revision) this.nativeAllVisible = false;
       this.options.reconciler.acceptAllVisible();
       if (revision !== this.revision || this.disposed) return;
 

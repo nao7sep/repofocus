@@ -172,6 +172,7 @@ async function start(
 
   const nativeVisibilityResetter = new NativeVisibilityResetter({
     executeCommand: command => nativeVisibilityCommands.execute(command),
+    waitForCommandSettlement: (milliseconds, signal) => nativeVisibilityCommands.waitForIdle(milliseconds, signal),
     getSelectionMode: () => vscode.workspace.getConfiguration('scm')
       .get<string>('repositories.selectionMode', 'multiple'),
     onDidChangeSelectionMode: listener => vscode.workspace.onDidChangeConfiguration(event => {
@@ -359,10 +360,10 @@ async function start(
   const shutdown = (): Promise<void> => {
     shutdownPromise ??= (async () => {
       monitor.dispose();
-      nativeVisibilityResetter.dispose();
       visibility.dispose();
       await visibility.waitForIdle();
       const { failedCommands, resetFailed } = await reconciler.shutdown();
+      nativeVisibilityResetter.dispose();
       nativeVisibilityCommands.dispose();
       actionability.clear();
       if (failedCommands.length === 0 && !resetFailed) {
