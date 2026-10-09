@@ -16,6 +16,7 @@ export interface RepoFocusDiagnosticsInput {
   readonly alwaysShowPatternCount: number;
 }
 
+/** Lets a pasted report from an older RepoFocus be read by the fields it actually had. */
 const diagnosticsFormatVersion = 1;
 
 export function createDiagnostics(input: RepoFocusDiagnosticsInput): string {

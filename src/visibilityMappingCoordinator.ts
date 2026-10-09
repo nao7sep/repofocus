@@ -86,12 +86,9 @@ export class VisibilityMappingCoordinator {
   private unavailableReason: VisibilityUnavailableReason | undefined;
   private reportedReason: VisibilityUnavailableReason | undefined;
   private commandRegistrationRetry: ReturnType<typeof setTimeout> | undefined;
-  private filteringRequested: boolean;
   private readonly commandEnumeration = new NonOverlappingHostOperation<readonly string[]>();
 
-  constructor(private readonly options: VisibilityMappingCoordinatorOptions) {
-    this.filteringRequested = options.filteringRequested();
-  }
+  constructor(private readonly options: VisibilityMappingCoordinatorOptions) {}
 
   get baselineEstablished(): boolean {
     return this.hasBaseline;
@@ -139,16 +136,15 @@ export class VisibilityMappingCoordinator {
   }
 
   /**
-   * Records the requested filtering state and applies it at once when a
-   * mapping baseline already exists. Without one, the request is recorded and
-   * a mapping run is (re)started if none is under way; the pending or running
-   * probe applies the live request as its own final step, so a caller never
-   * waits on the probe's bounded-but-long timeout to see its toggle take
-   * effect on the command surface.
+   * Applies the live filtering request at once when a mapping baseline
+   * already exists, or after a failure, where turning filtering off retries
+   * re-showing every repository. Otherwise a mapping run is (re)started if none
+   * is under way; the pending or running probe applies the live request as its
+   * own final step, so a caller never waits on the probe's bounded-but-long
+   * timeout to see its toggle take effect on the command surface.
    */
-  async updateFiltering(enabled = this.options.filteringRequested()): Promise<void> {
-    this.filteringRequested = enabled;
-    if (this.hasBaseline) {
+  async updateFiltering(): Promise<void> {
+    if (this.hasBaseline || !this.options.reconciler.compatible) {
       await this.options.reconciler.setFilteringEnabled(this.shouldFilter());
       return;
     }
@@ -169,7 +165,7 @@ export class VisibilityMappingCoordinator {
   }
 
   private shouldFilter(repositories = this.options.getRepositories()): boolean {
-    return this.filteringRequested && repositories.length >= minimumRepositoryCount;
+    return this.options.filteringRequested() && repositories.length >= minimumRepositoryCount;
   }
 
   private async drain(): Promise<void> {

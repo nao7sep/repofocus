@@ -1,5 +1,3 @@
-import { FilteringStateTransitionError } from './filteringStateTransaction';
-
 /** The extension's presentation boundary, per the error-handling conventions. */
 export type FailedOperation = 'compatibility' | 'copy-diagnostics' | 'open-documentation' | 'toggle';
 
@@ -22,7 +20,7 @@ export function describeMappingState(state: string): string | undefined {
   }
 }
 
-export function describeFailure(operation: FailedOperation, error: unknown): string {
+export function describeFailure(operation: FailedOperation, _error: unknown): string {
   switch (operation) {
     case 'compatibility':
       return incompatibleMessage;
@@ -31,10 +29,12 @@ export function describeFailure(operation: FailedOperation, error: unknown): str
     case 'open-documentation':
       return 'Couldn\'t open the documentation.';
     case 'toggle':
-      return error instanceof FilteringStateTransitionError && error.rollbackErrors.length > 0
-        ? 'RepoFocus could not fully restore filtering after a host failure. Reload the window, '
-          + 'then see RepoFocus output for details.'
-        : 'RepoFocus could not change filtering and restored the previous setting. '
-          + 'See RepoFocus output for details.';
+      return 'RepoFocus couldn\'t apply the filtering change. See RepoFocus output for details.';
   }
+}
+
+/** The filtering change took effect; only remembering it failed. */
+export function describeUnsavedFiltering(enabled: boolean): string {
+  return `Filtering is ${enabled ? 'on' : 'off'}, but VS Code couldn't save that choice. `
+    + 'It may not be remembered after you reload the window.';
 }

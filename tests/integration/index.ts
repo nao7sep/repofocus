@@ -510,8 +510,4 @@ export async function run(): Promise<void> {
     'Visibility resets must leave no workspace value for scm.repositories.selectionMode.',
   );
 
-  await api.shutdown();
-  await api.shutdown();
-  assert.equal(api.isHiddenByRepoFocus(reopenedAlpha), false, 'Deactivation must restore repositories hidden by RepoFocus.');
-  assert.equal(api.git.repositories.length, expectedRepositoryCount, 'Deactivation must not close Git repositories.');
 }

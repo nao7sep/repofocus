@@ -30,7 +30,9 @@ export interface NativeVisibilityCommandExecutorOptions {
  * Bounds and single-flights the unsupported native command seam. A timed-out
  * VS Code command cannot be cancelled, so it retains the one execution slot
  * until its underlying promise settles; recovery fails fast instead of piling
- * more toggles onto an operation whose outcome is unknown.
+ * more toggles onto an operation whose outcome is unknown. Selection-mode
+ * changes share the slot because they flip the same native state, which
+ * RepoFocus cannot read back, so no two of these commands may overlap.
  */
 export class NativeVisibilityCommandExecutor {
   private active: Promise<void> | undefined;

@@ -49,7 +49,7 @@ The `repofocus.alwaysShow` setting accepts Git repository glob patterns. A patte
 
 ## Commands
 
-- **RepoFocus: Toggle Filtering** disables filtering and restores repositories hidden by RepoFocus, or enables filtering again. The choice is stored per workspace.
+- **RepoFocus: Toggle Filtering** disables filtering and restores repositories hidden by RepoFocus, or enables filtering again. The choice is stored per workspace; if VS Code can't save it, filtering still changes and RepoFocus warns that the choice may not be remembered after you reload the window.
 - **RepoFocus: Refresh** rereads `alwaysShow`, reevaluates the Git state VS Code already holds, and retries paused initialization. It does not fetch or run Git status.
 - **RepoFocus: Copy Diagnostics** copies versions, aggregate counts, Git state, mapping state, and the `alwaysShow` pattern count. It excludes repository paths, remote URLs, branch names, file names, file contents, and error details.
 
@@ -69,9 +69,9 @@ RepoFocus reads only the branch, upstream, ahead/behind, rebase, and change-coun
 
 If filtering is paused because repositories are still loading, Source Control commands are not registered, or another provider is present, leave Source Control open and run **RepoFocus: Refresh** after the condition changes.
 
-If RepoFocus reports a compatibility failure, run **RepoFocus: Copy Diagnostics** and reload the VS Code window. Report a repeatable failure with the copied diagnostics and a synthetic workspace; real repository paths, remote URLs, branch names, and file contents are unnecessary.
+If RepoFocus reports a compatibility failure, run **RepoFocus: Copy Diagnostics** and reload the VS Code window. If repositories stay hidden after the failure, run **RepoFocus: Toggle Filtering** from the Command Palette to turn filtering off, which tries again to show every repository. Report a repeatable failure with the copied diagnostics and a synthetic workspace; real repository paths, remote URLs, branch names, and file contents are unnecessary.
 
-Disabling or uninstalling RepoFocus restores every confirmed hide it owns. If a native command never settles, RepoFocus stops issuing visibility commands and reports the unknown state rather than guessing.
+Disabling or uninstalling RepoFocus leaves the repositories it hid hidden: VS Code stops running an extension's commands before the extension stops, so nothing can re-show them at that point. VS Code remembers hidden repositories per workspace, so they also stay hidden after a reload in which RepoFocus does not filter, such as while another Source Control provider is present or after a compatibility failure. Show them again by selecting them in the Source Control Repositories view. If a native command never settles, RepoFocus stops issuing visibility commands and reports the unknown state rather than guessing.
 
 Questions, bug reports, and feature requests belong in [GitHub Issues](https://github.com/nao7sep/repofocus/issues). For anything security-related, e-mail instead of opening an issue.
 

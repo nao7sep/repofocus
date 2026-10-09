@@ -13,7 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- When RepoFocus is disabled or uninstalled and re-showing one hidden repository fails, it still re-shows every other repository before resetting the view to all-visible, and its stop log reports what failed instead of a clean stop.
+- When VS Code can't save the filtering choice, Toggle Filtering keeps the change and warns that it may not be remembered after you reload the window, instead of undoing it; a slow save could previously land after the undo anyway.
+- Copy Diagnostics no longer reports filtering as active after a visibility failure.
+- After a visibility failure whose all-visible reset also failed, turning filtering off tries the reset again instead of requiring a window reload.
+- The README no longer claims that disabling or uninstalling RepoFocus re-shows hidden repositories. VS Code stops running an extension's commands before the extension stops, so they stay hidden until shown again in Source Control.
 
 ## [0.1.3] - 2026-08-25
 

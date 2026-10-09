@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import type { ExtensionContext } from 'vscode';
 import type { RepoFocusExtensionApi } from '../src/extension';
+import { describeUnsavedFiltering } from '../src/userMessages';
 import { selectionModeCommands, visibilityCommandPrefix } from '../src/visibilityCommandResolver';
 
 const host = vi.hoisted(() => ({
@@ -9,6 +10,10 @@ const host = vi.hoisted(() => ({
   commands: [] as string[],
   mode: 'multiple',
   listeners: new Set<(event: { affectsConfiguration(key: string): boolean }) => unknown>(),
+  handlers: new Map<string, () => Promise<void>>(),
+  warnings: [] as string[],
+  errors: [] as string[],
+  saveStoredValue: async (_value: unknown): Promise<void> => {},
 }));
 
 vi.mock('vscode', () => ({
@@ -17,14 +22,17 @@ vi.mock('vscode', () => ({
   extensions: { getExtension: () => ({ isActive: true, exports: { getAPI: () => host.api } }) },
   window: {
     createOutputChannel: () => ({ appendLine() {}, show() {}, dispose() {} }),
-    showErrorMessage: async () => undefined,
+    showErrorMessage: async (message: string) => { host.errors.push(message); },
     showInformationMessage: async () => undefined,
-    showWarningMessage: async () => undefined,
+    showWarningMessage: async (message: string) => { host.warnings.push(message); },
   },
   commands: {
     executeCommand: (command: string) => host.execute(command),
     getCommands: async () => host.commands,
-    registerCommand: () => ({ dispose() {} }),
+    registerCommand: (command: string, handler: () => Promise<void>) => {
+      host.handlers.set(command, handler);
+      return { dispose: () => host.handlers.delete(command) };
+    },
   },
   workspace: {
     getConfiguration: (section: string) => ({
@@ -40,11 +48,18 @@ vi.mock('vscode', () => ({
 
 let runtime: RepoFocusExtensionApi | undefined;
 let subscriptions: { dispose(): void }[] = [];
-afterEach(async () => {
+/** VS Code disposes subscriptions synchronously, after it has cut the extension's connection. */
+function stopLikeHost(): void {
+  subscriptions.forEach(subscription => subscription.dispose());
+}
+
+afterEach(() => {
   try {
-    await runtime?.shutdown();
-    subscriptions.forEach(subscription => subscription.dispose());
+    stopLikeHost();
     host.listeners.clear();
+    host.warnings = [];
+    host.errors = [];
+    host.saveStoredValue = async () => {};
     runtime = undefined;
   } finally {
     vi.useRealTimers();
@@ -55,8 +70,7 @@ async function activateFixture() {
   const names = ['alpha', 'beta'];
   const visible = new Set(names);
   let selected: string | undefined = names[0];
-  let shuttingDown = false;
-  const shutdownCommands: string[] = [];
+  const commands: string[] = [];
   const event = () => ({ dispose() {} });
   const repositories = names.map(name => ({
     rootUri: { fsPath: `/${name}`, toString: () => `file:///${name}` },
@@ -78,7 +92,7 @@ async function activateFixture() {
   host.commands = [selectionModeCommands.single, selectionModeCommands.multiple, ...toggles];
   host.execute = async command => {
     if (command === 'setContext') return;
-    if (shuttingDown) shutdownCommands.push(command);
+    commands.push(command);
     if (command === selectionModeCommands.single || command === selectionModeCommands.multiple) {
       host.mode = command === selectionModeCommands.single ? 'single' : 'multiple';
       visible.clear();
@@ -91,7 +105,6 @@ async function activateFixture() {
     }
     const target = names[toggles.indexOf(command)];
     if (!target) throw new Error(`Unexpected command: ${command}`);
-    if (shuttingDown && target === 'alpha') throw new Error('Host failed to re-show alpha');
     if (visible.delete(target)) {
       if (selected === target) selected = names.find(name => visible.has(name));
     } else visible.add(target);
@@ -99,62 +112,84 @@ async function activateFixture() {
   subscriptions = [];
   const context = {
     subscriptions, extensionMode: 1, extension: { packageJSON: { version: 'fixture' } },
-    workspaceState: { get: () => true, update: async () => {} },
+    workspaceState: { get: () => true, update: (_key: string, value: unknown) => host.saveStoredValue(value) },
   } as unknown as ExtensionContext;
   const { activate } = await import('../src/extension');
   runtime = await activate(context);
-  return { names, visible, repositories, toggles, shutdownCommands, beginShutdown: () => { shuttingDown = true; } };
+  return { names, visible, repositories, toggles, commands };
 }
 
-it('keeps the native reset owner alive for the final shutdown fallback after a failed re-show', async () => {
+it('issues no host command and leaves no timer once stopped', async () => {
   vi.useFakeTimers();
-  const { names, visible, repositories, toggles, shutdownCommands, beginShutdown } = await activateFixture();
+  const { visible, repositories, commands } = await activateFixture();
   const settled = runtime!.waitForSettled();
   await vi.advanceTimersByTimeAsync(1_000);
   await settled;
   expect(repositories.every(repository => runtime!.isHiddenByRepoFocus(repository))).toBe(true);
+  const issued = commands.length;
+
+  stopLikeHost();
+  await vi.advanceTimersByTimeAsync(60_000);
+
+  // Repositories hidden at stop stay hidden: VS Code no longer runs this
+  // extension's commands, so stopping cannot re-show them.
+  expect(commands).toHaveLength(issued);
   expect(visible.size).toBe(0);
-
-  beginShutdown();
-  const shutdown = runtime!.shutdown();
-  expect(runtime!.shutdown()).toBe(shutdown);
-  await shutdown;
-
-  expect(shutdownCommands.slice(0, 2)).toEqual(expect.arrayContaining(toggles));
-  expect(shutdownCommands.slice(2)).toEqual([selectionModeCommands.single, selectionModeCommands.multiple]);
-  expect([...visible]).toEqual(names);
-  expect(host.mode).toBe('multiple');
+  expect(host.listeners.size).toBe(0);
   expect(vi.getTimerCount()).toBe(0);
 });
 
-it('drains an already-started reset during shutdown without starting another mapping run', async () => {
+it('cancels a pending mapping run when stopped before it starts', async () => {
   vi.useFakeTimers();
-  const { names, visible, repositories } = await activateFixture();
+  const { commands } = await activateFixture();
+
+  stopLikeHost();
+  await vi.advanceTimersByTimeAsync(60_000);
+
+  expect(commands).toEqual([]);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it('starts nothing further when stopped during a reset', async () => {
+  vi.useFakeTimers();
+  const { repositories, commands } = await activateFixture();
   const execute = host.execute;
   let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
-  const commands: string[] = [];
   host.execute = async command => {
-    commands.push(command);
     await execute(command);
     if (command === selectionModeCommands.single) await held;
   };
   try {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(commands).toEqual([selectionModeCommands.single]);
-    const shutdown = runtime!.shutdown();
-    let stopped = false;
-    void shutdown.then(() => { stopped = true; });
-    await Promise.resolve();
-    expect(stopped).toBe(false);
+
+    stopLikeHost();
     release();
-    await shutdown;
-    // The owned transition finishes all-visible; disposed mapping never probes or filters it.
-    expect(commands).toEqual([selectionModeCommands.single, selectionModeCommands.multiple]);
-    expect([...visible]).toEqual(names);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(commands).toEqual([selectionModeCommands.single]);
     expect(repositories.some(repository => runtime!.isHiddenByRepoFocus(repository))).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
   } finally {
     release();
   }
+});
+
+it('keeps a toggle that VS Code cannot save and warns that it may not be remembered', async () => {
+  vi.useFakeTimers();
+  const { repositories } = await activateFixture();
+  const settled = runtime!.waitForSettled();
+  await vi.advanceTimersByTimeAsync(1_000);
+  await settled;
+  host.saveStoredValue = async () => { throw new Error('storage failed'); };
+
+  const toggle = host.handlers.get('repofocus.toggle')!();
+  await vi.advanceTimersByTimeAsync(1_000);
+  await toggle;
+
+  expect(runtime!.isFilteringEnabled()).toBe(false);
+  expect(repositories.some(repository => runtime!.isHiddenByRepoFocus(repository))).toBe(false);
+  expect(host.warnings).toEqual([describeUnsavedFiltering(false)]);
+  expect(host.errors).toEqual([]);
 });

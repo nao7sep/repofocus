@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { FilteringStateTransitionError } from '../src/filteringStateTransaction';
-import { describeFailure, describeMappingState, type FailedOperation } from '../src/userMessages';
+import {
+  describeFailure,
+  describeMappingState,
+  describeUnsavedFiltering,
+  type FailedOperation,
+} from '../src/userMessages';
 
 const sentinel = 'SENTINEL-7f3a';
 
@@ -48,17 +52,17 @@ describe('describeFailure', () => {
       .toBe('Couldn\'t open the documentation.');
   });
 
-  it('tells a restored toggle from an incomplete rollback by error type', () => {
-    const restored = describeFailure('toggle', new FilteringStateTransitionError(hostileError(), []));
-    const incomplete = describeFailure(
-      'toggle',
-      new FilteringStateTransitionError(hostileError(), [hostileError()]),
-    );
+  it('says a failed toggle did not apply, without host detail', () => {
+    expect(describeFailure('toggle', hostileError()))
+      .toBe('RepoFocus couldn\'t apply the filtering change. See RepoFocus output for details.');
+  });
+});
 
-    expectAuthored(restored);
-    expectAuthored(incomplete);
-    expect(restored).toContain('restored the previous setting');
-    expect(incomplete).toContain('Reload the window');
-    expect(describeFailure('toggle', hostileError())).toBe(restored);
+describe('describeUnsavedFiltering', () => {
+  it.each([
+    [true, 'Filtering is on, but VS Code couldn\'t save that choice. It may not be remembered after you reload the window.'],
+    [false, 'Filtering is off, but VS Code couldn\'t save that choice. It may not be remembered after you reload the window.'],
+  ])('names the state that took effect when enabled is %s', (enabled, message) => {
+    expect(describeUnsavedFiltering(enabled)).toBe(message);
   });
 });

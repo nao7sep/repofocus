@@ -311,11 +311,11 @@ describe('VisibilityMappingCoordinator', () => {
     await coordinator.waitForIdle();
 
     filteringRequested = false;
-    await coordinator.updateFiltering(false);
+    await coordinator.updateFiltering();
     expect(native.visible.size).toBe(2);
 
     filteringRequested = true;
-    await coordinator.updateFiltering(true);
+    await coordinator.updateFiltering();
     expect(native.visible.size).toBe(0);
     expect(getCommands).toHaveBeenCalledOnce();
     expect(resetNativeVisibility).toHaveBeenCalledOnce();
@@ -352,7 +352,7 @@ describe('VisibilityMappingCoordinator', () => {
 
     filteringRequested = false;
     let settled = false;
-    void coordinator.updateFiltering(false).then(() => { settled = true; });
+    void coordinator.updateFiltering().then(() => { settled = true; });
     // Drains pending promise callbacks without moving the pinned clock.
     await vi.advanceTimersByTimeAsync(0);
     expect(settled).toBe(true);
@@ -461,7 +461,7 @@ describe('VisibilityMappingCoordinator', () => {
       coordinator.dispose();
       release();
       await coordinator.waitForIdle();
-      await fixture.reconciler.shutdown();
+      fixture.reconciler.dispose();
       fixture.coordinator.dispose();
     }
   });
@@ -490,6 +490,32 @@ describe('VisibilityMappingCoordinator', () => {
     expect(reconciler.hiddenRepositoryCount).toBe(0);
     expect(execute).not.toHaveBeenCalled();
     expect(onError.mock.calls[0][0]).toBe(failure);
+  });
+
+  it('passes a request to turn filtering off to a failed reconciler without a baseline', async () => {
+    const native = nativeRepositories(['alpha', 'beta']);
+    let filteringRequested = true;
+    const reconciler = new VisibilityReconciler({ toggle: vi.fn(native.execute) });
+    const coordinator = new VisibilityMappingCoordinator({
+      filteringRequested: () => filteringRequested,
+      getCommands: () => Promise.resolve(native.discoveryCommands),
+      getRepositories: () => native.repositories,
+      topologyReady: () => true,
+      resetNativeVisibility: () => Promise.reject(new Error('native reset failed')),
+      reconciler,
+      commandRetryAttempts: 1,
+      topologySettleMilliseconds: 0,
+    });
+    coordinator.requestRefresh();
+    await coordinator.waitForIdle();
+    expect(coordinator.baselineEstablished).toBe(false);
+    const setFilteringEnabled = vi.spyOn(reconciler, 'setFilteringEnabled');
+
+    // Turning filtering off is the user's retry for re-showing repositories.
+    filteringRequested = false;
+    await coordinator.updateFiltering();
+
+    expect(setFilteringEnabled).toHaveBeenCalledWith(false);
   });
 
   it('fails visible when native focus stops following isolated visibility changes', async () => {

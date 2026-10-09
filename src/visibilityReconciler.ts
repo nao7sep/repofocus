@@ -8,13 +8,6 @@ export interface VisibilityFailure {
   readonly strandedCommandCount: number;
 }
 
-export interface ShutdownResult {
-  /** Hidden commands whose re-show failed during this shutdown. */
-  readonly failedCommands: readonly string[];
-  /** No all-visible reset succeeded after a failed toggle, so native visibility is unknown. */
-  readonly resetFailed: boolean;
-}
-
 export interface VisibilityReconcilerOptions {
   readonly toggle: ToggleVisibility;
   /** Re-establishes a known all-visible state without relying on another toggle. */
@@ -49,6 +42,9 @@ export class VisibilityReconciler {
   private paused = false;
   private requested = false;
   private scheduled = false;
+  /** False once a toggle outcome is unknown; the ledger can then no longer be inverted. */
+  private ledgerTrusted = true;
+  /** The all-visible reset in flight or already succeeded; a failed one is cleared for retry. */
   private ambiguousRecovery: Promise<boolean> | undefined;
   private queue: Promise<void> = Promise.resolve();
   private pendingToggles = 0;
@@ -59,8 +55,9 @@ export class VisibilityReconciler {
     return this.state === 'active';
   }
 
+  /** Whether filtering is applied now; a failed or disposed reconciler filters nothing. */
   get enabled(): boolean {
-    return this.filteringEnabled;
+    return this.state === 'active' && this.filteringEnabled;
   }
 
   get hiddenRepositoryCount(): number {
@@ -110,20 +107,15 @@ export class VisibilityReconciler {
   }
 
   setFilteringEnabled(enabled: boolean): Promise<void> {
-    if (this.filteringEnabled === enabled) {
-      // A failed reconciler retains commands whose restoration failed. The
-      // user's repeated disable/show-all request is the explicit retry path.
-      if (this.state !== 'active' && !enabled) {
-        this.queue = this.queue.then(() => this.restoreOwnedCommands());
-      }
+    if (this.state === 'failed') {
+      // Filtering cannot resume after a failure. Turning it off is the user's
+      // retry for re-showing what RepoFocus hid, including a failed reset.
+      if (!enabled) this.queue = this.queue.then(() => this.restoreOwnedCommands());
       return this.queue;
     }
+    if (this.state !== 'active' || this.filteringEnabled === enabled) return this.queue;
     this.filteringEnabled = enabled;
-    if (this.state === 'active') {
-      this.requestReconcile();
-    } else if (!enabled) {
-      this.queue = this.queue.then(() => this.restoreOwnedCommands());
-    }
+    this.requestReconcile();
     return this.queue;
   }
 
@@ -191,17 +183,14 @@ export class VisibilityReconciler {
     return this.queue;
   }
 
-  /** Only the first call restores visibility; later calls report nothing. */
-  async shutdown(): Promise<ShutdownResult> {
-    if (this.state === 'disposed') return { failedCommands: [], resetFailed: false };
+  /**
+   * VS Code disposes extension subscriptions after it has already cut the
+   * extension's connection to the workbench, so nothing can be re-shown here.
+   * Disposal only stops further work and failure reports.
+   */
+  dispose(): void {
     this.state = 'disposed';
-    this.paused = false;
     this.requested = false;
-    await this.queue;
-    const result = await this.restoreEveryOwnedCommand();
-    this.actionability.clear();
-    this.mappings.clear();
-    return result;
   }
 
   private async toggle(command: string): Promise<void> {
@@ -251,20 +240,31 @@ export class VisibilityReconciler {
     }
   }
 
+  /**
+   * A busy refusal never started its command, but it means an earlier command
+   * is still unsettled, so native visibility is just as unknown and the same
+   * recovery applies.
+   */
   private failAmbiguousToggle(error: unknown): Promise<boolean> {
-    if (this.ambiguousRecovery) return this.ambiguousRecovery;
-    if (this.state === 'active') {
-      this.state = 'failed';
-    }
-    this.options.onError?.(asError(error), { strandedCommandCount: this.hiddenCommands.size });
+    if (this.state === 'disposed') return Promise.resolve(false);
+    if (!this.ledgerTrusted) return this.resetAfterAmbiguousToggle();
+    this.ledgerTrusted = false;
+    this.state = 'failed';
     this.requested = false;
-    const recovery = this.resetAfterAmbiguousToggle();
-    this.ambiguousRecovery = recovery;
-    return recovery;
+    this.options.onError?.(asError(error), { strandedCommandCount: this.hiddenCommands.size });
+    return this.resetAfterAmbiguousToggle();
   }
 
   /** Resolves whether the all-visible baseline was established. */
-  private async resetAfterAmbiguousToggle(): Promise<boolean> {
+  private resetAfterAmbiguousToggle(): Promise<boolean> {
+    this.ambiguousRecovery ??= this.attemptAllVisibleReset().then(succeeded => {
+      if (!succeeded) this.ambiguousRecovery = undefined;
+      return succeeded;
+    });
+    return this.ambiguousRecovery;
+  }
+
+  private async attemptAllVisibleReset(): Promise<boolean> {
     if (!this.options.resetToAllVisible) return false;
     try {
       await this.options.resetToAllVisible();
@@ -272,6 +272,7 @@ export class VisibilityReconciler {
       this.mappings.clear();
       return true;
     } catch (error) {
+      if (this.state === 'disposed') return false;
       this.options.onError?.(
         new Error('Failed to establish an all-visible baseline after an ambiguous native toggle.', {
           cause: asError(error),
@@ -283,9 +284,13 @@ export class VisibilityReconciler {
   }
 
   private async restoreOwnedCommands(): Promise<void> {
+    if (this.state === 'disposed') return;
     // Once a toggle outcome is ambiguous, the ledger is no longer safe to
-    // invert. The one all-visible reset is the only permitted recovery.
-    if (this.ambiguousRecovery) return;
+    // invert. The all-visible reset is the only permitted recovery.
+    if (!this.ledgerTrusted) {
+      await this.resetAfterAmbiguousToggle();
+      return;
+    }
     for (const command of [...this.hiddenCommands]) {
       try {
         await this.reveal(command);
@@ -295,30 +300,5 @@ export class VisibilityReconciler {
         return;
       }
     }
-  }
-
-  /**
-   * Shutdown is the last chance to re-show anything, so one failed re-show
-   * does not abandon the other repositories: each command is a different
-   * repository and keeps its own bound. Any failure leaves the ledger unsafe,
-   * so the one all-visible reset follows.
-   */
-  private async restoreEveryOwnedCommand(): Promise<ShutdownResult> {
-    if (this.ambiguousRecovery) {
-      return { failedCommands: [], resetFailed: !(await this.ambiguousRecovery) };
-    }
-    const failedCommands: string[] = [];
-    for (const command of [...this.hiddenCommands]) {
-      try {
-        await this.toggle(command);
-        this.hiddenCommands.delete(command);
-      } catch (error) {
-        failedCommands.push(command);
-        this.options.onError?.(asError(error), { strandedCommandCount: this.hiddenCommands.size });
-      }
-    }
-    if (failedCommands.length === 0) return { failedCommands, resetFailed: false };
-    this.ambiguousRecovery = this.resetAfterAmbiguousToggle();
-    return { failedCommands, resetFailed: !(await this.ambiguousRecovery) };
   }
 }

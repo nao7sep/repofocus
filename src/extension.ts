@@ -2,11 +2,7 @@ import * as vscode from 'vscode';
 import { classifyRepository, type RepositoryActionability } from './actionability';
 import { compileAlwaysShowConfiguration } from './alwaysShow';
 import { createDiagnostics } from './diagnostics';
-import {
-  FilteringStateTransaction,
-  FilteringStateTransitionError,
-  readStoredFilteringEnabled,
-} from './filteringStateTransaction';
+import { FilteringPreference, readStoredFilteringEnabled } from './filteringPreference';
 import type { GitApi, GitExtension, GitRepository } from './gitApi';
 import { GitRepositoryMonitor } from './gitRepositoryMonitor';
 import { OneShotHostOperation, waitForHostOperation } from './hostOperation';
@@ -17,7 +13,7 @@ import {
 } from './nativeVisibilityCommandExecutor';
 import { NativeVisibilityResetter } from './nativeVisibilityReset';
 import { toActionabilityInput } from './repositoryStateAdapter';
-import { describeFailure, describeMappingState } from './userMessages';
+import { describeFailure, describeMappingState, describeUnsavedFiltering } from './userMessages';
 import { VisibilityMappingCoordinator } from './visibilityMappingCoordinator';
 import { VisibilityReconciler } from './visibilityReconciler';
 
@@ -32,15 +28,8 @@ export interface RepoFocusExtensionApi {
   getActionability(repository: GitRepository): RepositoryActionability | undefined;
   isFilteringEnabled(): boolean;
   isHiddenByRepoFocus(repository: GitRepository): boolean;
-  shutdown(): Promise<void>;
   waitForSettled(): Promise<void>;
 }
-
-interface ActiveRuntime {
-  shutdown(): Promise<void>;
-}
-
-let activeRuntime: ActiveRuntime | undefined;
 
 async function activateGit(): Promise<GitApi> {
   const extension = vscode.extensions.getExtension<GitExtension['exports']>(gitExtensionId);
@@ -78,6 +67,10 @@ async function start(
       await vscode.commands.executeCommand(command);
     },
   });
+  // VS Code cuts this extension's connection to the workbench before it
+  // disposes these subscriptions, so stopping cannot re-show repositories or
+  // write settings. Each owner only stops its local timers and work.
+  context.subscriptions.push(nativeVisibilityCommands);
   const manifest = context.extension.packageJSON as { version?: unknown };
   const extensionVersion = typeof manifest.version === 'string' ? manifest.version : 'unknown';
 
@@ -122,8 +115,18 @@ async function start(
       });
     },
   });
+  context.subscriptions.push(reconciler);
 
   const initialFilteringEnabled = readStoredFilteringEnabled(context.workspaceState.get<unknown>(filteringStateKey));
+  const filteringPreference = new FilteringPreference({
+    initialValue: initialFilteringEnabled,
+    apply: () => visibility.updateFiltering(),
+    persist: enabled => context.workspaceState.update(filteringStateKey, enabled),
+    publishContext: async enabled => {
+      await vscode.commands.executeCommand('setContext', 'repofocus.filteringEnabled', enabled);
+    },
+    hostWriteTimeoutMilliseconds,
+  });
   await waitForHostOperation(
     Promise.resolve(vscode.commands.executeCommand('setContext', 'repofocus.compatible', true)),
     hostWriteTimeoutMilliseconds,
@@ -141,7 +144,7 @@ async function start(
 
   let monitor: GitRepositoryMonitor;
   const visibility = new VisibilityMappingCoordinator({
-    filteringRequested: () => initialFilteringEnabled,
+    filteringRequested: () => filteringPreference.current,
     getCommands: async () => await vscode.commands.getCommands(true),
     getRepositories: () => monitor?.repositories ?? [],
     topologyReady: () => git.state === 'initialized',
@@ -169,6 +172,7 @@ async function start(
       });
     },
   });
+  context.subscriptions.push(visibility);
 
   const nativeVisibilityResetter = new NativeVisibilityResetter({
     executeCommand: command => nativeVisibilityCommands.execute(command),
@@ -264,7 +268,7 @@ async function start(
       vscodeVersion: vscode.version,
       platform: `${process.platform}-${process.arch}`,
       gitApiState: git.state,
-      filteringEnabled: filteringState.current,
+      filteringEnabled: filteringPreference.current,
       filteringActive: reconciler.enabled,
       compatible: reconciler.compatible,
       baselineEstablished: visibility.baselineEstablished,
@@ -293,38 +297,23 @@ async function start(
     await reconciler.waitForIdle();
   };
 
-  const filteringState = new FilteringStateTransaction({
-    initialValue: initialFilteringEnabled,
-    applyNative: enabled => visibility.updateFiltering(enabled),
-    persist: enabled => waitForHostOperation(
-      Promise.resolve(context.workspaceState.update(filteringStateKey, enabled)),
-      hostWriteTimeoutMilliseconds,
-      'Filtering state persistence',
-    ),
-    publishContext: async enabled => {
-      await waitForHostOperation(
-        Promise.resolve(vscode.commands.executeCommand('setContext', 'repofocus.filteringEnabled', enabled)),
-        hostWriteTimeoutMilliseconds,
-        'Filtering context update',
-      );
-    },
-  });
-
   context.subscriptions.push(
     vscode.commands.registerCommand('repofocus.toggle', async () => {
       try {
-        const enabled = await filteringState.toggle();
-        logger.info('Filtering state changed.', { enabled });
+        const { enabled, saveError, contextError } = await filteringPreference.toggle();
+        logger.info('Filtering preference changed.', { enabled });
+        if (contextError !== undefined) {
+          logger.warn('Filtering context update failed; the Refresh button may not match.', {}, contextError);
+        }
+        if (saveError !== undefined) {
+          logger.error('Saving the filtering preference failed.', saveError, { enabled });
+          void vscode.window.showWarningMessage(describeUnsavedFiltering(enabled));
+        }
         if (!enabled) return;
         const explanation = describeMappingState(visibility.mappingState);
         if (explanation) void vscode.window.showInformationMessage(explanation);
       } catch (error) {
-        logger.error('Filtering state change failed.', error);
-        if (error instanceof FilteringStateTransitionError) {
-          error.rollbackErrors.forEach((rollbackError, index) => {
-            logger.error('Filtering state rollback failed.', rollbackError, { index });
-          });
-        }
+        logger.error('Filtering change failed.', error);
         void vscode.window.showErrorMessage(describeFailure('toggle', error));
       }
     }),
@@ -351,37 +340,16 @@ async function start(
     version: extensionVersion,
     gitState: git.state,
     repositoryCount: monitor.repositories.length,
-    filteringEnabled: filteringState.current,
+    filteringEnabled: filteringPreference.current,
     alwaysShowPatterns: alwaysShow.patternCount,
     alwaysShowConfigurationValid: alwaysShow.valid,
   });
 
-  let shutdownPromise: Promise<void> | undefined;
-  const shutdown = (): Promise<void> => {
-    shutdownPromise ??= (async () => {
-      monitor.dispose();
-      visibility.dispose();
-      await visibility.waitForIdle();
-      const { failedCommands, resetFailed } = await reconciler.shutdown();
-      nativeVisibilityResetter.dispose();
-      nativeVisibilityCommands.dispose();
-      actionability.clear();
-      if (failedCommands.length === 0 && !resetFailed) {
-        logger.info('RepoFocus stopped.', { clean: true });
-      } else {
-        logger.warn('RepoFocus stopped.', { clean: false, failedCommands, resetFailed });
-      }
-    })();
-    return shutdownPromise;
-  };
-  activeRuntime = { shutdown };
-
   return {
     git,
     getActionability,
-    isFilteringEnabled: () => filteringState.current,
+    isFilteringEnabled: () => filteringPreference.current,
     isHiddenByRepoFocus: repository => reconciler.isHiddenByRepoFocus(repository),
-    shutdown,
     waitForSettled,
   };
 }
@@ -395,10 +363,4 @@ function readAlwaysShowConfiguration(logger: Logger) {
     });
   }
   return configuration;
-}
-
-export async function deactivate(): Promise<void> {
-  const runtime = activeRuntime;
-  activeRuntime = undefined;
-  await runtime?.shutdown();
 }
