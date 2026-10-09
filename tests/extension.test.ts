@@ -193,3 +193,27 @@ it('keeps a toggle that VS Code cannot save and warns that it may not be remembe
   expect(host.warnings).toEqual([describeUnsavedFiltering(false)]);
   expect(host.errors).toEqual([]);
 });
+
+it('shows no message for a toggle that a later toggle has already replaced', async () => {
+  vi.useFakeTimers();
+  await activateFixture();
+  const settled = runtime!.waitForSettled();
+  await vi.advanceTimersByTimeAsync(1_000);
+  await settled;
+  let saves = 0;
+  host.saveStoredValue = async () => {
+    saves += 1;
+    if (saves === 1) throw new Error('storage failed');
+  };
+
+  const toggle = host.handlers.get('repofocus.toggle')!;
+  const first = toggle();
+  const second = toggle();
+  await vi.advanceTimersByTimeAsync(1_000);
+  await Promise.all([first, second]);
+
+  expect(runtime!.isFilteringEnabled()).toBe(true);
+  expect(saves).toBe(2);
+  expect(host.warnings).toEqual([]);
+  expect(host.errors).toEqual([]);
+});

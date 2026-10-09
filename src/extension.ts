@@ -307,8 +307,11 @@ async function start(
         }
         if (saveError !== undefined) {
           logger.error('Saving the filtering preference failed.', saveError, { enabled });
-          void vscode.window.showWarningMessage(describeUnsavedFiltering(enabled));
         }
+        // A later toggle has replaced this value and reports for itself; its
+        // save supersedes this one.
+        if (filteringPreference.current !== enabled) return;
+        if (saveError !== undefined) void vscode.window.showWarningMessage(describeUnsavedFiltering(enabled));
         if (!enabled) return;
         const explanation = describeMappingState(visibility.mappingState);
         if (explanation) void vscode.window.showInformationMessage(explanation);
