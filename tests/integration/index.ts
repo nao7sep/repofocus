@@ -336,6 +336,21 @@ export async function run(): Promise<void> {
     api.getActionability(alpha)?.actionable === false && api.isHiddenByRepoFocus(alpha) ? true : undefined,
   );
 
+  // alwaysShow ignores case on Windows and macOS and matches exactly on Linux.
+  // Refresh rereads the setting, so the outcome does not race the change event.
+  const ignoresCase = process.platform === 'win32' || process.platform === 'darwin';
+  await configuration.update('alwaysShow', ['Alpha'], vscode.ConfigurationTarget.Workspace);
+  await vscode.commands.executeCommand('repofocus.refresh');
+  assert.equal(
+    api.getActionability(alpha)?.reasons.some(reason => reason.kind === 'always-show') ?? false,
+    ignoresCase,
+    `The pattern Alpha must ${ignoresCase ? '' : 'not '}match repository alpha on ${process.platform}.`,
+  );
+  assert.equal(api.isHiddenByRepoFocus(alpha), !ignoresCase);
+  await configuration.update('alwaysShow', [], vscode.ConfigurationTarget.Workspace);
+  await vscode.commands.executeCommand('repofocus.refresh');
+  assert.equal(api.isHiddenByRepoFocus(alpha), true, 'Removing the pattern must hide the clean repository again.');
+
   await vscode.commands.executeCommand('git.close', alpha.rootUri);
   await waitFor('alpha repository to close', () => repositoryAt(api, alphaPath) ? undefined : true);
   await openRepository(alphaPath);
