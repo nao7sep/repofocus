@@ -89,4 +89,3 @@ Install dependencies with `npm install`. `npm test` runs the type and unit-test 
 - **GitHub:** [@nao7sep](https://github.com/nao7sep)
 - **Email:** [yoshinao@inoguchi.com](mailto:yoshinao@inoguchi.com)
 - **Website:** [inoguchi.com](https://inoguchi.com)
-- **Website:** [inoguchi.com](https://inoguchi.com)
