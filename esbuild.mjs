@@ -7,6 +7,10 @@ const builds = [
     outfile: 'dist/extension.js',
   },
   {
+    entryPoints: ['src/alwaysShowWorker.ts'],
+    outfile: 'dist/alwaysShowWorker.js',
+  },
+  {
     entryPoints: ['tests/integration/index.ts'],
     outfile: 'dist-tests/integration.js',
   },

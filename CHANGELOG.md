@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Complex `alwaysShow` patterns no longer freeze VS Code's shared extension host. Repositories stay visible while matching is pending or fails; changing the setting or running Refresh retries a failed check.
 - Closing a repository during command discovery no longer causes a false compatibility failure or stops filtering the remaining repositories.
 - Turning filtering off retries a failed startup or refresh reset without toggling repositories from an outdated visibility record.
 - Rapid toggles no longer show an obsolete save warning when the latest choice returns to the same on/off value.

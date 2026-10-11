@@ -47,6 +47,8 @@ A detached HEAD, unborn branch, or local-only branch is not remote work by itsel
 
 The `repofocus.alwaysShow` setting accepts Git repository glob patterns. A pattern matches either the path VS Code reports for a repository or its directory name. Matching ignores upper and lower case on Windows and macOS, and is exact on Linux. Useful examples include `company`, `clients/*`, and `experiments/**`. A bare directory name is the most portable way to match a repository that is itself a multi-root workspace folder; use a longer path when repositories with the same directory name should differ.
 
+A repository stays visible while its patterns are being checked. If the check fails or takes too long, it stays visible; adjust the patterns or run **RepoFocus: Refresh** to retry. Details appear in the RepoFocus Output channel.
+
 ## Commands
 
 - **RepoFocus: Toggle Filtering** disables filtering and restores repositories hidden by RepoFocus, or enables filtering again. The choice is stored per workspace; if VS Code can't save it, filtering still changes and RepoFocus warns that the choice may not be remembered after you reload the window.

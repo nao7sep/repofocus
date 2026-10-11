@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import {
-  compileAlwaysShowConfiguration,
-  createAlwaysShowMatcher,
-  matchesAlwaysShow,
-} from '../src/alwaysShow';
+import { compileAlwaysShowConfiguration } from '../src/alwaysShow';
+
+function matchesAlwaysShow(path: string, patterns: readonly string[]): boolean {
+  return compileAlwaysShowConfiguration(patterns).matches(path);
+}
 
 describe('matchesAlwaysShow', () => {
   it.each([
@@ -55,7 +55,7 @@ describe('matchesAlwaysShow', () => {
   });
 
   it('reuses one compiled matcher across repository state events', () => {
-    const matches = createAlwaysShowMatcher(['clients/**', 'repofocus']);
+    const { matches } = compileAlwaysShowConfiguration(['clients/**', 'repofocus']);
 
     expect(matches('clients/api')).toBe(true);
     expect(matches('/work/repofocus')).toBe(true);
@@ -66,8 +66,8 @@ describe('matchesAlwaysShow', () => {
     const tooMany = Array.from({ length: 101 }, (_, index) => `repo-${index}`);
     const tooLong = ['x'.repeat(513)];
 
-    expect(createAlwaysShowMatcher(tooMany)('repo-0')).toBe(false);
-    expect(createAlwaysShowMatcher(tooLong)('x'.repeat(513))).toBe(false);
+    expect(compileAlwaysShowConfiguration(tooMany).matches('repo-0')).toBe(false);
+    expect(compileAlwaysShowConfiguration(tooLong).matches('x'.repeat(513))).toBe(false);
   });
 
   it.each([

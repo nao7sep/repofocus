@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
+import { Worker } from 'node:worker_threads';
 import { classifyRepository, type RepositoryActionability } from './actionability';
-import { compileAlwaysShowConfiguration } from './alwaysShow';
+import { validateAlwaysShowPatterns } from './alwaysShow';
+import { AlwaysShowMatcher } from './alwaysShowMatcher';
 import { createDiagnostics } from './diagnostics';
 import { FilteringPreference, readStoredFilteringEnabled } from './filteringPreference';
 import type { GitApi, GitExtension, GitRepository } from './gitApi';
@@ -76,6 +78,12 @@ async function start(
 
   const actionability = new Map<string, RepositoryActionability>();
   let alwaysShow = readAlwaysShowConfiguration(logger);
+  const alwaysShowMatcher = new AlwaysShowMatcher({
+    createWorker: () => new Worker(context.asAbsolutePath('dist/alwaysShowWorker.js')),
+  });
+  alwaysShowMatcher.configure(alwaysShow);
+  context.subscriptions.push(alwaysShowMatcher);
+  const loggedMatcherFailures = new WeakSet<Error>();
   let compatibilityFailureReported = false;
 
   const reconciler = new VisibilityReconciler({
@@ -193,22 +201,42 @@ async function start(
   const evaluateRepository = (repository: GitRepository): void => {
     let value: RepositoryActionability;
     let evaluationError: unknown;
+    let matchingFailure: Error | undefined;
     try {
+      const key = repository.rootUri.toString();
+      const patternResult = alwaysShowMatcher.evaluate(
+        key,
+        vscode.workspace.asRelativePath(repository.rootUri.fsPath),
+        () => {
+          // The result belongs to this repository and settings generation. Read
+          // current Git state rather than publishing the submitted snapshot.
+          if (monitor?.getRepository(key) === repository) evaluateRepository(repository);
+        },
+      );
+      if (patternResult.kind === 'failed') {
+        matchingFailure = patternResult.error;
+        throw matchingFailure;
+      }
       value = classifyRepository({
         ...toActionabilityInput(repository.state),
-        alwaysShow: alwaysShow.matches(vscode.workspace.asRelativePath(repository.rootUri.fsPath)),
+        alwaysShow: patternResult.kind === 'matched' && patternResult.matches,
       });
+      // Unknown matching is provisional visibility, not an evaluation failure.
+      if (patternResult.kind === 'pending') value = { ...value, actionable: true };
     } catch (error) {
       evaluationError = error;
       const detail = error instanceof Error ? error.message : String(error);
       value = { actionable: true, reasons: [{ kind: 'error', detail }] };
     }
     const errorDetails = value.reasons.flatMap(reason => reason.kind === 'error' ? [reason.detail] : []);
-    if (errorDetails.length > 0) {
+    const repeatedMatcherFailure = matchingFailure !== undefined
+      && loggedMatcherFailures.has(matchingFailure);
+    if (errorDetails.length > 0 && !repeatedMatcherFailure) {
       logger.warn('Repository evaluation failed; the repository stays visible.', {
         repository: repository.rootUri.fsPath,
         errors: errorDetails,
       }, evaluationError);
+      if (matchingFailure) loggedMatcherFailures.add(matchingFailure);
     }
     actionability.set(repository.rootUri.toString(), value);
     reconciler.setActionability(repository, value);
@@ -224,7 +252,8 @@ async function start(
       });
       visibility.requestRefresh();
     },
-    onRepositoryReplaced: () => {
+    onRepositoryReplaced: repository => {
+      alwaysShowMatcher.forget(repository.rootUri.toString());
       if (!monitorReady) return;
       logger.info('Git repository topology changed.', {
         change: 'replaced',
@@ -234,6 +263,7 @@ async function start(
     },
     onRepositoryChanged: evaluateRepository,
     onRepositoryClosed: repository => {
+      alwaysShowMatcher.forget(repository.rootUri.toString());
       actionability.delete(repository.rootUri.toString());
       reconciler.removeRepository(repository);
       if (!monitorReady || git.state !== 'initialized') return;
@@ -293,6 +323,7 @@ async function start(
   };
 
   const waitForSettled = async (): Promise<void> => {
+    await alwaysShowMatcher.waitForIdle();
     await visibility.waitForIdle();
     await reconciler.waitForIdle();
   };
@@ -325,6 +356,7 @@ async function start(
     vscode.commands.registerCommand('repofocus.refresh', async () => {
       logger.info('Manual visibility refresh requested.');
       alwaysShow = readAlwaysShowConfiguration(logger);
+      alwaysShowMatcher.configure(alwaysShow);
       evaluateAll();
       visibility.retryIfUnavailable();
       await waitForSettled();
@@ -333,6 +365,7 @@ async function start(
     vscode.workspace.onDidChangeConfiguration(event => {
       if (!event.affectsConfiguration('repofocus.alwaysShow')) return;
       alwaysShow = readAlwaysShowConfiguration(logger);
+      alwaysShowMatcher.configure(alwaysShow);
       evaluateAll();
       logger.info('Always-show patterns changed.', {
         alwaysShowPatterns: alwaysShow.patternCount,
@@ -361,7 +394,7 @@ async function start(
 
 function readAlwaysShowConfiguration(logger: Logger) {
   const value = vscode.workspace.getConfiguration('repofocus').get<unknown>('alwaysShow', []);
-  const configuration = compileAlwaysShowConfiguration(value);
+  const configuration = validateAlwaysShowPatterns(value);
   if (!configuration.valid) {
     logger.warn('The alwaysShow setting is invalid; it reads as its built-in empty list.', {
       alwaysShowPatterns: configuration.patternCount,

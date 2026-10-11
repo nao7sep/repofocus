@@ -28,17 +28,16 @@ function candidates(reportedPath: string): string[] {
   return name && name !== path ? [path, name] : [path];
 }
 
-export function matchesAlwaysShow(
-  reportedPath: string,
-  patterns: readonly string[],
-): boolean {
-  return createAlwaysShowMatcher(patterns)(reportedPath);
-}
-
-/** Compile configuration once; repository state events only perform matches. */
+/** Pure compiled matcher; production uses it only inside the isolated worker. */
 export interface AlwaysShowConfiguration {
   readonly patternCount: number;
   readonly matches: (reportedPath: string) => boolean;
+  readonly valid: boolean;
+}
+
+export interface AlwaysShowPatterns {
+  readonly patterns: readonly string[];
+  readonly patternCount: number;
   readonly valid: boolean;
 }
 
@@ -50,14 +49,11 @@ function ignoresCase(platform: NodeJS.Platform): boolean {
   return platform === 'win32' || platform === 'darwin';
 }
 
-export function compileAlwaysShowConfiguration(
-  value: unknown,
-  platform: NodeJS.Platform = process.platform,
-): AlwaysShowConfiguration {
+export function validateAlwaysShowPatterns(value: unknown): AlwaysShowPatterns {
   // An invalid set reads as its built-in per config-sets-conventions; the
   // caller logs the warning.
   if (!Array.isArray(value)) {
-    return { patternCount: 0, matches: () => false, valid: false };
+    return { patternCount: 0, patterns: [], valid: false };
   }
   const patterns = value as readonly unknown[];
   if (
@@ -68,23 +64,27 @@ export function compileAlwaysShowConfiguration(
   ) {
     // Settings normally reject this shape, but a hand-edited or synced value can
     // bypass validation; it is never compiled.
-    return { patternCount: patterns.length, matches: () => false, valid: false };
+    return { patternCount: patterns.length, patterns: [], valid: false };
   }
-  const validPatterns = patterns as readonly string[];
+  return { patternCount: patterns.length, patterns: [...patterns] as string[], valid: true };
+}
+
+export function compileAlwaysShowConfiguration(
+  value: unknown,
+  platform: NodeJS.Platform = process.platform,
+): AlwaysShowConfiguration {
+  const { patterns, patternCount, valid } = validateAlwaysShowPatterns(value);
+  if (!valid) return { patternCount, valid, matches: () => false };
   // Brace expansion is not part of the documented pattern surface and can
   // multiply one setting into a very large generated pattern set.
   const options = { dot: true, nobrace: true, nocase: ignoresCase(platform) } as const;
-  const matchers = validPatterns.map(pattern => new Minimatch(normalize(pattern), options));
+  const matchers = patterns.map(pattern => new Minimatch(normalize(pattern), options));
   return {
-    patternCount: validPatterns.length,
+    patternCount,
     valid: true,
     matches: reportedPath => {
       const paths = candidates(reportedPath);
       return matchers.some(matcher => paths.some(path => matcher.match(path)));
     },
   };
-}
-
-export function createAlwaysShowMatcher(value: unknown): (reportedPath: string) => boolean {
-  return compileAlwaysShowConfiguration(value).matches;
 }

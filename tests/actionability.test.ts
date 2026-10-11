@@ -81,12 +81,6 @@ describe('classifyRepository', () => {
     expect(reasonKinds(input)).toEqual([]);
   });
 
-  it('keeps an evaluation failure visible', () => {
-    const result = classifyRepository(cleanInput({ evaluationError: 'Git state unavailable.' }));
-    expect(result.actionable).toBe(true);
-    expect(result.reasons).toEqual([{ kind: 'error', detail: 'Git state unavailable.' }]);
-  });
-
   it('keeps an always-show repository visible without Git work', () => {
     expect(reasonKinds(cleanInput({ alwaysShow: true }))).toEqual(['always-show']);
   });

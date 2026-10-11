@@ -12,7 +12,6 @@ export interface RepositoryActionabilityInput {
   readonly remoteCount: number;
   readonly branch: BranchState;
   readonly alwaysShow?: boolean;
-  readonly evaluationError?: string;
 }
 
 export type ActionabilityReason =
@@ -57,7 +56,7 @@ export function classifyRepository(
     if (behindError) countErrors.push(behindError);
   }
 
-  const errors = [input.evaluationError, ...countErrors];
+  const errors = countErrors;
   if (input.branch.kind === 'unknown') errors.push(input.branch.detail);
   for (const detail of errors) {
     if (detail) reasons.push({ kind: 'error', detail });

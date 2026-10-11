@@ -7,7 +7,7 @@ export default defineConfig({
       reportsDirectory: 'coverage',
       reporter: ['text', 'html'],
       include: ['src/**/*.ts'],
-      exclude: ['src/extension.ts', 'src/gitApi.ts'],
+      exclude: ['src/extension.ts', 'src/gitApi.ts', 'src/alwaysShowWorker.ts', 'src/alwaysShowWorkerProtocol.ts'],
     },
     include: ['tests/**/*.test.ts'],
   },

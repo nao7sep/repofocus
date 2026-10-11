@@ -13,6 +13,7 @@ const host = vi.hoisted(() => ({
   handlers: new Map<string, () => Promise<void>>(),
   warnings: [] as string[],
   errors: [] as string[],
+  logs: [] as string[],
   saveStoredValue: async (_value: unknown): Promise<void> => {},
 }));
 
@@ -21,7 +22,7 @@ vi.mock('vscode', () => ({
   version: 'fixture',
   extensions: { getExtension: () => ({ isActive: true, exports: { getAPI: () => host.api } }) },
   window: {
-    createOutputChannel: () => ({ appendLine() {}, show() {}, dispose() {} }),
+    createOutputChannel: () => ({ appendLine(line: string) { host.logs.push(line); }, show() {}, dispose() {} }),
     showErrorMessage: async (message: string) => { host.errors.push(message); },
     showInformationMessage: async () => undefined,
     showWarningMessage: async (message: string) => { host.warnings.push(message); },
@@ -59,6 +60,7 @@ afterEach(() => {
     host.listeners.clear();
     host.warnings = [];
     host.errors = [];
+    host.logs = [];
     host.saveStoredValue = async () => {};
     runtime = undefined;
   } finally {
@@ -148,6 +150,26 @@ it('cancels a pending mapping run when stopped before it starts', async () => {
 
   expect(commands).toEqual([]);
   expect(vi.getTimerCount()).toBe(0);
+});
+
+it('keeps a repository visible when its actual Git-state evaluation throws', async () => {
+  vi.useFakeTimers();
+  const { repositories } = await activateFixture();
+  const failure = new Error('Git state unavailable.');
+  for (const repository of repositories) {
+    Object.defineProperty(repository.state, 'workingTreeChanges', { get() { throw failure; } });
+  }
+  const refreshed = host.handlers.get('repofocus.refresh')!();
+  await vi.advanceTimersByTimeAsync(1_000);
+  await refreshed;
+  await runtime!.waitForSettled();
+
+  expect(runtime!.getActionability(repositories[0])).toEqual({
+    actionable: true, reasons: [{ kind: 'error', detail: 'Git state unavailable.' }],
+  });
+  expect(runtime!.isHiddenByRepoFocus(repositories[0])).toBe(false);
+  expect(host.logs.some(line => line.includes('Repository evaluation failed;') && line.includes('Git state unavailable.'))).toBe(true);
+  expect(host.logs.filter(line => line.includes('Repository evaluation failed;'))).toHaveLength(2);
 });
 
 it('starts nothing further when stopped during a reset', async () => {

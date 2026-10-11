@@ -12,12 +12,12 @@ const defaultWaitTimeoutMilliseconds = 15_000;
 
 async function waitFor<T>(
   description: string,
-  read: () => T | undefined,
+  read: () => T | undefined | Promise<T | undefined>,
   timeoutMilliseconds = defaultWaitTimeoutMilliseconds,
 ): Promise<T> {
   const deadline = Date.now() + timeoutMilliseconds;
   while (Date.now() < deadline) {
-    const value = read();
+    const value = await read();
     if (value !== undefined) {
       return value;
     }
@@ -477,12 +477,23 @@ export async function run(): Promise<void> {
     api.getActionability(reopenedAlpha) && !api.isHiddenByRepoFocus(reopenedAlpha) ? true : undefined,
   );
   await api.waitForSettled();
-  await vscode.commands.executeCommand('repofocus.copyDiagnostics');
-  assert.equal(
-    (JSON.parse(await vscode.env.clipboard.readText()) as { nativeMappingState?: string }).nativeMappingState,
-    'other-scm-providers',
-    'Diagnostics must name the non-Git provider as the reason filtering paused.',
-  );
+  // A newly opened repository is provisionally visible before its native
+  // command registers. That is not evidence of the non-Git stand-down yet;
+  // observe the actual reason after the automatic registration retry.
+  let lastDiagnostics: { nativeMappingState?: string } = {};
+  try {
+    await waitFor('diagnostics to name the non-Git provider', async () => {
+      await vscode.commands.executeCommand('repofocus.copyDiagnostics');
+      lastDiagnostics = JSON.parse(await vscode.env.clipboard.readText());
+      return lastDiagnostics.nativeMappingState === 'other-scm-providers' ? true : undefined;
+    });
+  } catch (error) {
+    throw new Error(
+      `Non-Git stand-down did not settle: diagnostics=${JSON.stringify(lastDiagnostics)} `
+      + `visibilityCommands=${await visibilityCommandCount()} GitRepositories=${api.git.repositories.length}.`,
+      { cause: error },
+    );
+  }
   otherProvider.dispose();
   await vscode.commands.executeCommand('repofocus.refresh');
   await waitFor('filtering to resume once the non-Git provider is gone', () =>
