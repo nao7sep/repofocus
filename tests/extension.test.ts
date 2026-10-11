@@ -217,3 +217,39 @@ it('shows no message for a toggle that a later toggle has already replaced', asy
   expect(host.warnings).toEqual([]);
   expect(host.errors).toEqual([]);
 });
+
+it('suppresses an old failed-save warning when three toggles return to the same value', async () => {
+  vi.useFakeTimers();
+  const { toggles } = await activateFixture();
+  await vi.advanceTimersByTimeAsync(1_000);
+  await runtime!.waitForSettled();
+  const execute = host.execute;
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  host.execute = async command => {
+    await execute(command);
+    if (command === toggles[0]) await held;
+  };
+  let saves = 0;
+  let stored: unknown;
+  host.saveStoredValue = async value => {
+    saves += 1;
+    if (saves === 1) throw new Error('first save failed');
+    stored = value;
+  };
+
+  const toggle = host.handlers.get('repofocus.toggle')!;
+  const first = toggle();
+  await vi.advanceTimersByTimeAsync(0);
+  const second = toggle();
+  const third = toggle();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(stored).toBe(false);
+  release();
+  await vi.advanceTimersByTimeAsync(0);
+  await Promise.all([first, second, third]);
+
+  expect(runtime!.isFilteringEnabled()).toBe(false);
+  expect(host.warnings).toEqual([]);
+  expect(host.errors).toEqual([]);
+});

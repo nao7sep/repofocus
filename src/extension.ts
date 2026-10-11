@@ -297,8 +297,10 @@ async function start(
     await reconciler.waitForIdle();
   };
 
+  let toggleRevision = 0;
   context.subscriptions.push(
     vscode.commands.registerCommand('repofocus.toggle', async () => {
+      const revision = ++toggleRevision;
       try {
         const { enabled, saveError, contextError } = await filteringPreference.toggle();
         logger.info('Filtering preference changed.', { enabled });
@@ -308,15 +310,15 @@ async function start(
         if (saveError !== undefined) {
           logger.error('Saving the filtering preference failed.', saveError, { enabled });
         }
-        // A later toggle has replaced this value and reports for itself; its
-        // save supersedes this one.
-        if (filteringPreference.current !== enabled) return;
+        // A later request owns the result even if it returns to the same value.
+        if (revision !== toggleRevision) return;
         if (saveError !== undefined) void vscode.window.showWarningMessage(describeUnsavedFiltering(enabled));
         if (!enabled) return;
         const explanation = describeMappingState(visibility.mappingState);
         if (explanation) void vscode.window.showInformationMessage(explanation);
       } catch (error) {
         logger.error('Filtering change failed.', error);
+        if (revision !== toggleRevision) return;
         void vscode.window.showErrorMessage(describeFailure('toggle', error));
       }
     }),

@@ -244,8 +244,18 @@ export class VisibilityMappingCoordinator {
     }
     if (revision !== this.revision || this.disposed) return;
 
+    if (!this.nativeAllVisible) {
+      try {
+        await this.options.resetNativeVisibility();
+      } catch (error) {
+        this.hasBaseline = false;
+        // Even an obsolete refresh may have changed native visibility before
+        // failing. Never restore its previous hide ledger as though nothing ran.
+        if (!this.disposed) this.options.reconciler.failAllVisibleReset(error);
+        return;
+      }
+    }
     try {
-      if (!this.nativeAllVisible) await this.options.resetNativeVisibility();
       if (revision === this.revision) this.nativeAllVisible = false;
       this.options.reconciler.acceptAllVisible();
       if (revision !== this.revision || this.disposed) return;

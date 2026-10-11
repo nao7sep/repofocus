@@ -42,7 +42,7 @@ export class VisibilityReconciler {
   private paused = false;
   private requested = false;
   private scheduled = false;
-  /** False once a toggle outcome is unknown; the ledger can then no longer be inverted. */
+  /** False once a toggle or reset outcome is unknown; the ledger can then no longer be inverted. */
   private ledgerTrusted = true;
   /** The all-visible reset in flight or already succeeded; a failed one is cleared for retry. */
   private ambiguousRecovery: Promise<boolean> | undefined;
@@ -173,6 +173,18 @@ export class VisibilityReconciler {
     return this.queue;
   }
 
+  /** A partial reset invalidates all prior hides; only a later all-visible reset is safe. */
+  failAllVisibleReset(error: unknown): void {
+    if (this.state !== 'active') return;
+    this.ledgerTrusted = false;
+    this.state = 'failed';
+    this.paused = false;
+    this.requested = false;
+    this.options.onError?.(asError(error), { strandedCommandCount: this.hiddenCommands.size });
+    // The reset already failed. Retry through the existing recovery owner only
+    // when the user turns filtering off, never by inverting the stale ledger.
+  }
+
   failCompatibility(error: unknown): Promise<void> {
     if (this.state !== 'active') return this.queue;
     this.state = 'failed';
@@ -274,7 +286,7 @@ export class VisibilityReconciler {
     } catch (error) {
       if (this.state === 'disposed') return false;
       this.options.onError?.(
-        new Error('Failed to establish an all-visible baseline after an ambiguous native toggle.', {
+        new Error('Failed to establish an all-visible baseline after an ambiguous native visibility operation.', {
           cause: asError(error),
         }),
         { strandedCommandCount: this.hiddenCommands.size },
@@ -285,7 +297,7 @@ export class VisibilityReconciler {
 
   private async restoreOwnedCommands(): Promise<void> {
     if (this.state === 'disposed') return;
-    // Once a toggle outcome is ambiguous, the ledger is no longer safe to
+    // Once native visibility is ambiguous, the ledger is no longer safe to
     // invert. The all-visible reset is the only permitted recovery.
     if (!this.ledgerTrusted) {
       await this.resetAfterAmbiguousToggle();

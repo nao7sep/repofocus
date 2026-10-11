@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Turning filtering off retries a failed startup or refresh reset without toggling repositories from an outdated visibility record.
+- Rapid toggles no longer show an obsolete save warning when the latest choice returns to the same on/off value.
 - When VS Code can't save the filtering choice, Toggle Filtering keeps the change and warns that it may not be remembered after you reload the window, instead of undoing it; a slow save could previously land after the undo anyway.
 - Copy Diagnostics no longer reports filtering as active after a visibility failure.
 - After a visibility failure whose all-visible reset also failed, turning filtering off tries the reset again instead of requiring a window reload.
