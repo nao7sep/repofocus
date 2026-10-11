@@ -245,15 +245,7 @@ export class VisibilityMappingCoordinator {
     if (revision !== this.revision || this.disposed) return;
 
     if (!this.nativeAllVisible) {
-      try {
-        await this.options.resetNativeVisibility();
-      } catch (error) {
-        this.hasBaseline = false;
-        // Even an obsolete refresh may have changed native visibility before
-        // failing. Never restore its previous hide ledger as though nothing ran.
-        if (!this.disposed) this.options.reconciler.failAllVisibleReset(error);
-        return;
-      }
+      if (!await this.resetBaseline()) return;
     }
     try {
       if (revision === this.revision) this.nativeAllVisible = false;
@@ -280,11 +272,36 @@ export class VisibilityMappingCoordinator {
       this.options.onInitialized?.({ repositoryCount: repositories.length, revision });
     } catch (error) {
       this.hasBaseline = false;
+      if (this.disposed) return;
+      if (revision !== this.revision) {
+        // A closed repository can retire a command before the probe attributes
+        // its hide. Never replay that obsolete ledger, even when the newest
+        // request will stand down without mapping. Issued probe work has settled.
+        if (!this.nativeAllVisible && this.options.reconciler.compatible && await this.resetBaseline()) {
+          this.nativeAllVisible = true;
+        }
+        return;
+      }
       await this.options.reconciler.restoreOwned();
       if (revision !== this.revision || this.disposed) return;
       if (error instanceof VisibilityProbeInterruptedError) return;
       await this.options.reconciler.failCompatibility(error);
     }
+  }
+
+  private async resetBaseline(): Promise<boolean> {
+    try {
+      await this.options.resetNativeVisibility();
+    } catch (error) {
+      this.hasBaseline = false;
+      // Even an obsolete reset may have changed native visibility before
+      // failing. Only the user's off request may retry an untrusted ledger.
+      if (!this.disposed) this.options.reconciler.failAllVisibleReset(error);
+      return false;
+    }
+    if (this.disposed) return false;
+    this.options.reconciler.acceptAllVisible();
+    return this.options.reconciler.compatible;
   }
 
   private async resolveSettledCommands(

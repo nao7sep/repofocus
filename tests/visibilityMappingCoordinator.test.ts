@@ -14,6 +14,7 @@ interface NativeRepositoryFixture {
   readonly repositories: readonly GitRepository[];
   readonly reset: () => Promise<void>;
   readonly visible: Set<string>;
+  readonly close: (name: string) => void;
 }
 
 function nativeRepositories(
@@ -23,6 +24,7 @@ function nativeRepositories(
   staleFocusOnToggle?: number,
 ): NativeRepositoryFixture {
   const visible = new Set(names);
+  const open = new Set(names);
   let selected: string | undefined = commandOrder[0];
   const repositories = names.map(name => ({
     rootUri: { fsPath: `/${name}`, toString: () => `file:///${name}` },
@@ -35,18 +37,18 @@ function nativeRepositories(
   const targets = new Map(commands.map((command, index) => [command, commandOrder[index]]));
   let toggleCount = 0;
   return {
-    commands,
-    discoveryCommands: [selectionModeCommands.single, selectionModeCommands.multiple, ...commands],
-    repositories,
+    get commands() { return commands.filter(command => open.has(targets.get(command)!)); },
+    get discoveryCommands() { return [selectionModeCommands.single, selectionModeCommands.multiple, ...this.commands]; },
+    get repositories() { return repositories.filter(repository => open.has(repository.rootUri.fsPath.slice(1))); },
     visible,
     reset: async () => {
-      for (const name of names) visible.add(name);
-      selected = selectedAfterReset;
+      for (const name of open) visible.add(name);
+      selected = open.has(selectedAfterReset) ? selectedAfterReset : commandOrder.find(name => open.has(name));
     },
     execute: async command => {
       toggleCount += 1;
       const target = targets.get(command);
-      if (!target) throw new Error(`Unexpected command: ${command}`);
+      if (!target || !open.has(target)) throw new Error(`Unexpected command: ${command}`);
       if (visible.delete(target)) {
         if (selected === target && toggleCount !== staleFocusOnToggle) {
           selected = commandOrder.find(name => visible.has(name));
@@ -54,6 +56,11 @@ function nativeRepositories(
       } else {
         visible.add(target);
       }
+    },
+    close: name => {
+      open.delete(name);
+      visible.delete(name);
+      if (selected === name) selected = commandOrder.find(candidate => visible.has(candidate));
     },
   };
 }
@@ -427,6 +434,59 @@ describe('VisibilityMappingCoordinator', () => {
     expect(coordinator.baselineEstablished).toBe(true);
   });
 
+  it.each([true, false])('recovers a closed probe command before applying the latest filtering request: %s', async enabled => {
+    const native = nativeRepositories(['alpha', 'beta', 'gamma']);
+    const closed = native.repositories[0];
+    const retiredCommand = native.commands[0];
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    let started!: () => void;
+    const issued = new Promise<void>(resolve => { started = resolve; });
+    const execute = vi.fn(async (command: string) => {
+      await native.execute(command);
+      if (execute.mock.calls.length === 1) {
+        started();
+        await held;
+      }
+    });
+    const onError = vi.fn();
+    const resetNativeVisibility = vi.fn(native.reset);
+    const reconciler = new VisibilityReconciler({ toggle: execute, resetToAllVisible: native.reset, onError });
+    for (const repository of native.repositories) reconciler.setActionability(repository, clean);
+    let filteringRequested = true;
+    const coordinator = new VisibilityMappingCoordinator({
+      filteringRequested: () => filteringRequested,
+      getCommands: () => Promise.resolve(native.discoveryCommands),
+      getRepositories: () => native.repositories,
+      topologyReady: () => true,
+      resetNativeVisibility,
+      reconciler,
+      topologySettleMilliseconds: 0,
+    });
+    try {
+      coordinator.requestRefresh();
+      await issued;
+      native.close('alpha');
+      reconciler.removeRepository(closed);
+      filteringRequested = enabled;
+      coordinator.requestRefresh();
+      release();
+      await coordinator.waitForIdle();
+      await reconciler.waitForIdle();
+
+      expect(execute.mock.calls.filter(([command]) => command === retiredCommand)).toHaveLength(1);
+      expect(onError).not.toHaveBeenCalled();
+      expect(reconciler.compatible).toBe(true);
+      expect(coordinator.baselineEstablished).toBe(enabled);
+      expect(native.visible).toEqual(new Set(enabled ? [] : ['beta', 'gamma']));
+      expect(reconciler.hiddenRepositoryCount).toBe(enabled ? 2 : 0);
+    } finally {
+      release();
+      coordinator.dispose();
+      reconciler.dispose();
+    }
+  });
+
   it('keeps a newer foreign all-visible hint when an older reset finishes', async () => {
     const fixture = coordinatorFixture(['alpha', 'beta']);
     let release!: () => void;
@@ -463,6 +523,42 @@ describe('VisibilityMappingCoordinator', () => {
       await coordinator.waitForIdle();
       fixture.reconciler.dispose();
       fixture.coordinator.dispose();
+    }
+  });
+
+  it('uses a foreign all-visible reset when it interrupts a probe waiting for focus', async () => {
+    const native = nativeRepositories(['alpha', 'beta'], ['alpha', 'beta'], 'beta', 3);
+    const execute = vi.fn(native.execute);
+    const onError = vi.fn();
+    const reconciler = new VisibilityReconciler({ toggle: execute, onError });
+    for (const repository of native.repositories) reconciler.setActionability(repository, clean);
+    const resetNativeVisibility = vi.fn(native.reset);
+    const coordinator = new VisibilityMappingCoordinator({
+      filteringRequested: () => true,
+      getCommands: () => Promise.resolve(native.discoveryCommands),
+      getRepositories: () => native.repositories,
+      topologyReady: () => true,
+      resetNativeVisibility,
+      reconciler,
+      topologySettleMilliseconds: 0,
+    });
+    try {
+      coordinator.requestRefresh();
+      await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(3));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(reconciler.toggling).toBe(false);
+      await native.reset();
+      coordinator.acceptForeignReset();
+      await vi.advanceTimersByTimeAsync(10);
+      await coordinator.waitForIdle();
+
+      expect(resetNativeVisibility).toHaveBeenCalledOnce();
+      expect(onError).not.toHaveBeenCalled();
+      expect(coordinator.baselineEstablished).toBe(true);
+      expect(native.visible.size).toBe(0);
+    } finally {
+      coordinator.dispose();
+      reconciler.dispose();
     }
   });
 

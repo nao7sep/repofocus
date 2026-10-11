@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Closing a repository during command discovery no longer causes a false compatibility failure or stops filtering the remaining repositories.
 - Turning filtering off retries a failed startup or refresh reset without toggling repositories from an outdated visibility record.
 - Rapid toggles no longer show an obsolete save warning when the latest choice returns to the same on/off value.
 - When VS Code can't save the filtering choice, Toggle Filtering keeps the change and warns that it may not be remembered after you reload the window, instead of undoing it; a slow save could previously land after the undo anyway.
