@@ -98,6 +98,13 @@ describe('matchesAlwaysShow', () => {
     expect(configuration.matches('Alpha')).toBe(true);
   });
 
+  it('applies Windows path rules for the requested platform rather than the host', () => {
+    const pattern = ['//?/C:/work/*'];
+
+    expect(compileAlwaysShowConfiguration(pattern, 'win32').matches('C:\\work\\alpha')).toBe(true);
+    expect(compileAlwaysShowConfiguration(pattern, 'linux').matches('C:\\work\\alpha')).toBe(false);
+  });
+
   it('retains only the aggregate count for a malformed array', () => {
     const configuration = compileAlwaysShowConfiguration(['repofocus', null]);
 

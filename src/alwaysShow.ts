@@ -76,8 +76,10 @@ export function compileAlwaysShowConfiguration(
   const { patterns, patternCount, valid } = validateAlwaysShowPatterns(value);
   if (!valid) return { patternCount, valid, matches: () => false };
   // Brace expansion is not part of the documented pattern surface and can
-  // multiply one setting into a very large generated pattern set.
-  const options = { dot: true, nobrace: true, nocase: ignoresCase(platform) } as const;
+  // multiply one setting into a very large generated pattern set. The platform
+  // also reaches minimatch, whose Windows drive-letter and UNC handling would
+  // otherwise follow the process rather than the platform being matched for.
+  const options = { dot: true, nobrace: true, nocase: ignoresCase(platform), platform } as const;
   const matchers = patterns.map(pattern => new Minimatch(normalize(pattern), options));
   return {
     patternCount,
