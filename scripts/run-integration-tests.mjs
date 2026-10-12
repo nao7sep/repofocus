@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runTests } from '@vscode/test-electron';
 
@@ -24,7 +24,7 @@ function git(repositoryPath, ...args) {
 }
 
 async function createRepositoryAt(repositoryPath) {
-  const name = repositoryPath.split('/').pop();
+  const name = basename(repositoryPath);
   await mkdir(repositoryPath, { recursive: true });
   git(repositoryPath, 'init', '-b', 'main');
   await writeFile(join(repositoryPath, 'tracked.txt'), `${name}\n`, 'utf8');
