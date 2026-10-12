@@ -83,26 +83,12 @@ describe('matchesAlwaysShow', () => {
     expect(configuration.matches('repofocus')).toBe(false);
   });
 
-  it.each(['win32', 'darwin'] as const)('ignores case on %s', platform => {
-    const configuration = compileAlwaysShowConfiguration(['Alpha'], platform);
+  it('ignores case on every platform', () => {
+    const configuration = compileAlwaysShowConfiguration(['Alpha', 'Clients/*']);
 
     expect(configuration.matches('alpha')).toBe(true);
-    expect(configuration.matches('/work/alpha')).toBe(true);
-  });
-
-  it('matches case exactly on linux', () => {
-    const configuration = compileAlwaysShowConfiguration(['Alpha'], 'linux');
-
-    expect(configuration.matches('alpha')).toBe(false);
-    expect(configuration.matches('/work/alpha')).toBe(false);
-    expect(configuration.matches('Alpha')).toBe(true);
-  });
-
-  it('applies Windows path rules for the requested platform rather than the host', () => {
-    const pattern = ['//?/C:/work/*'];
-
-    expect(compileAlwaysShowConfiguration(pattern, 'win32').matches('C:\\work\\alpha')).toBe(true);
-    expect(compileAlwaysShowConfiguration(pattern, 'linux').matches('C:\\work\\alpha')).toBe(false);
+    expect(configuration.matches('/work/ALPHA')).toBe(true);
+    expect(configuration.matches('clients/api')).toBe(true);
   });
 
   it('retains only the aggregate count for a malformed array', () => {

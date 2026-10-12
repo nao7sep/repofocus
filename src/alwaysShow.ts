@@ -41,14 +41,6 @@ export interface AlwaysShowPatterns {
   readonly valid: boolean;
 }
 
-/**
- * Matching follows how the platform's disks usually treat names: Windows and
- * macOS ignore upper and lower case, Linux does not.
- */
-function ignoresCase(platform: NodeJS.Platform): boolean {
-  return platform === 'win32' || platform === 'darwin';
-}
-
 export function validateAlwaysShowPatterns(value: unknown): AlwaysShowPatterns {
   // An invalid set reads as its built-in per config-sets-conventions; the
   // caller logs the warning.
@@ -69,17 +61,15 @@ export function validateAlwaysShowPatterns(value: unknown): AlwaysShowPatterns {
   return { patternCount: patterns.length, patterns: [...patterns] as string[], valid: true };
 }
 
-export function compileAlwaysShowConfiguration(
-  value: unknown,
-  platform: NodeJS.Platform = process.platform,
-): AlwaysShowConfiguration {
+export function compileAlwaysShowConfiguration(value: unknown): AlwaysShowConfiguration {
   const { patterns, patternCount, valid } = validateAlwaysShowPatterns(value);
   if (!valid) return { patternCount, valid, matches: () => false };
   // Brace expansion is not part of the documented pattern surface and can
-  // multiply one setting into a very large generated pattern set. The platform
-  // also reaches minimatch, whose Windows drive-letter and UNC handling would
-  // otherwise follow the process rather than the platform being matched for.
-  const options = { dot: true, nobrace: true, nocase: ignoresCase(platform), platform } as const;
+  // multiply one setting into a very large generated pattern set. Case is
+  // ignored on every platform: a pattern only keeps repositories visible, so a
+  // differently cased match on a case-sensitive disk shows an extra clean
+  // repository rather than hiding one (developer decision).
+  const options = { dot: true, nobrace: true, nocase: true } as const;
   const matchers = patterns.map(pattern => new Minimatch(normalize(pattern), options));
   return {
     patternCount,

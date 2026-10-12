@@ -7,7 +7,7 @@ parentPort!.on('message', (request: AlwaysShowWorkerRequest) => {
   let response: AlwaysShowWorkerResponse;
   try {
     if (request.kind === 'configure') {
-      configuration = compileAlwaysShowConfiguration(request.patterns, request.platform);
+      configuration = compileAlwaysShowConfiguration(request.patterns);
       response = { kind: 'ready' };
     } else {
       if (!configuration) throw new Error('Always-show matching started before configuration.');

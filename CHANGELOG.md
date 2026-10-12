@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `alwaysShow` patterns now ignore upper and lower case on Linux too, as they already did on Windows and macOS, so one setting matches the same repositories everywhere.
 - A malformed synced or hand-edited `alwaysShow` setting now reads as its built-in empty list, matching no repository, and logs a warning, instead of keeping every repository visible.
 
 ### Fixed

@@ -46,7 +46,6 @@ export class AlwaysShowMatcher {
 
   constructor(private readonly options: {
     readonly createWorker: () => AlwaysShowWorkerPort;
-    readonly platform?: NodeJS.Platform;
     readonly startupTimeoutMilliseconds?: number;
     readonly matchTimeoutMilliseconds?: number;
   }) {}
@@ -176,7 +175,7 @@ export class AlwaysShowMatcher {
     });
     worker.unref();
     const response = await this.request(
-      { kind: 'configure', patterns: this.configuration.patterns, platform: this.options.platform ?? process.platform },
+      { kind: 'configure', patterns: this.configuration.patterns },
       this.options.startupTimeoutMilliseconds ?? 5_000,
     );
     if (response.kind !== 'ready') throw new Error('Unexpected always-show configuration response.');

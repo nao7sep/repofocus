@@ -1,5 +1,5 @@
 export type AlwaysShowWorkerRequest =
-  | { readonly kind: 'configure'; readonly patterns: readonly string[]; readonly platform: NodeJS.Platform }
+  | { readonly kind: 'configure'; readonly patterns: readonly string[] }
   | { readonly kind: 'match'; readonly path: string };
 
 export type AlwaysShowWorkerResponse =
