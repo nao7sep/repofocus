@@ -18,6 +18,15 @@ describe('matchesAlwaysShow', () => {
 
   it('normalizes Windows separators', () => {
     expect(matchesAlwaysShow('clients\\customer-a', ['clients/customer-*'])).toBe(true);
+    expect(matchesAlwaysShow('clients/customer-a', ['clients\\customer-*'])).toBe(true);
+  });
+
+  // Normalization is platform-neutral, so absolute Windows paths and patterns
+  // behave the same on every test host.
+  it('matches absolute Windows paths with either separator or drive-letter case', () => {
+    expect(matchesAlwaysShow('C:\\work\\repofocus', ['C:\\work\\*'])).toBe(true);
+    expect(matchesAlwaysShow('C:\\work\\repofocus', ['c:/work/repofocus'])).toBe(true);
+    expect(matchesAlwaysShow('C:\\work\\repofocus', ['D:/work/*'])).toBe(false);
   });
 
   // A repository that IS a workspace folder has no relative form — VS Code hands
@@ -89,6 +98,13 @@ describe('matchesAlwaysShow', () => {
     expect(configuration.matches('alpha')).toBe(true);
     expect(configuration.matches('/work/ALPHA')).toBe(true);
     expect(configuration.matches('clients/api')).toBe(true);
+  });
+
+  // minimatch takes its Windows root rules from the running process, so only a
+  // Windows host exercises them; elsewhere this is reported as skipped.
+  it.skipIf(process.platform !== 'win32')('treats extended-length Windows paths as their drive path on a Windows host', () => {
+    expect(matchesAlwaysShow('\\\\?\\C:\\work\\repofocus', ['C:/work/*'])).toBe(true);
+    expect(matchesAlwaysShow('C:\\work\\repofocus', ['//?/C:/work/*'])).toBe(true);
   });
 
   it('retains only the aggregate count for a malformed array', () => {
