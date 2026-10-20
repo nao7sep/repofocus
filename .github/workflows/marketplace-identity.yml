@@ -9,9 +9,9 @@ name: Marketplace identity
 # cannot be assumed from a laptop, so the only place that first authentication can
 # happen is here, inside a workflow holding the federated credential.
 #
-# Run this, copy the printed id, and paste it into
-#   https://marketplace.visualstudio.com/manage/publishers/nao7sep  ->  Members -> Add
-# with the role Contributor. Re-run it if the identity is ever recreated.
+# Run this, copy the printed id, and paste it into the Marketplace management page
+# of the publisher named in package.json, under Members -> Add, with the role
+# Contributor. Re-run it if the identity is ever recreated.
 #
 # NOTE ON SCOPE: the federated credential is bound to `environment:marketplace`,
 # NOT to a branch or tag. Federated subjects do not support wildcards, so a
@@ -56,6 +56,6 @@ jobs:
             echo "$id"
             echo '```'
             echo
-            echo "Paste into **Members → Add** on the \`nao7sep\` publisher, role **Contributor**."
+            echo "Paste into **Members → Add** on the Marketplace publisher named in package.json, role **Contributor**."
             echo "This is the Azure DevOps profile id — client/tenant/resource ids are rejected there."
           } >> "$GITHUB_STEP_SUMMARY"

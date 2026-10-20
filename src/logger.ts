@@ -59,7 +59,7 @@ export class Logger {
     try {
       this.sink.appendLine(line);
     } catch (error) {
-      // The logging-conventions' fallback; an OutputChannel can close before deactivation finishes.
+      // An OutputChannel can close before deactivation finishes; the console keeps the line.
       console.error(line);
       console.error('RepoFocus log sink failed.', error);
     }

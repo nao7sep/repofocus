@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +10,13 @@ const extensionDevelopmentPath = resolve(
   process.env.REPOFOCUS_INTEGRATION_EXTENSION_PATH ?? projectRoot,
 );
 const vscodeExecutablePath = process.env.VSCODE_EXECUTABLE_PATH;
-const vscodeVersion = process.env.REPOFOCUS_INTEGRATION_VSCODE_VERSION ?? '1.131.0';
+// The default run uses the oldest VS Code the manifest accepts.
+const { engines } = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8'));
+const minimumVscodeVersion = /^\^(\d+\.\d+\.\d+)$/.exec(engines.vscode)?.[1];
+if (!minimumVscodeVersion) {
+  throw new Error(`engines.vscode must be a caret range such as ^MAJOR.MINOR.PATCH, not ${engines.vscode}.`);
+}
+const vscodeVersion = process.env.REPOFOCUS_INTEGRATION_VSCODE_VERSION ?? minimumVscodeVersion;
 const temporaryRoots = [];
 
 async function temporaryRoot(prefix) {

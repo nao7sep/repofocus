@@ -357,8 +357,8 @@ export async function run(): Promise<void> {
   await api.waitForSettled();
   assert.equal(api.isHiddenByRepoFocus(reopenedAlpha), true, 'A clean repository reopened after activation must be hidden.');
 
-  // Every other condition the README lists as keeping a repository visible, and
-  // every state it says stays hidden, through VS Code's real Git reporting.
+  // Every other condition that keeps a repository visible, and every state that
+  // stays hidden, through VS Code's real Git reporting.
   const repo03Path = join(fixtureRoot, 'repo-03');
   const repo03 = repositoryAt(api, repo03Path);
   assert(repo03, 'The fixture must include repo-03.');

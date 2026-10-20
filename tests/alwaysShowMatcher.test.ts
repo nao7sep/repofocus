@@ -172,7 +172,7 @@ describe('real bundled always-show worker', () => {
   beforeAll(async () => {
     root = await mkdtemp(join(tmpdir(), 'repofocus-worker-test-'));
     workerPath = join(root, 'alwaysShowWorker.cjs');
-    await build({ entryPoints: ['src/alwaysShowWorker.ts'], outfile: workerPath, bundle: true, platform: 'node', format: 'cjs', target: 'node22' });
+    await build({ entryPoints: ['src/alwaysShowWorker.ts'], outfile: workerPath, bundle: true, platform: 'node', format: 'cjs' });
   });
   afterAll(async () => { await rm(root, { recursive: true, force: true }); });
 

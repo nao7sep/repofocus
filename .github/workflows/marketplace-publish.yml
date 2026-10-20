@@ -15,7 +15,7 @@ name: Marketplace publish
 # AUTHENTICATION is Microsoft Entra workload identity federation — no PAT, no
 # stored secret. GitHub mints a short-lived OIDC token, Azure exchanges it for an
 # access token for the user-assigned managed identity `repofocus-publisher`, and
-# that identity is a Contributor on Marketplace publisher `nao7sep`.
+# that identity is a Contributor on the Marketplace publisher named in package.json.
 # (Global Azure DevOps PATs retire 2026-12-01; this path does not depend on them.)
 #
 # `environment: marketplace` is LOAD-BEARING: the federated credential's subject is
@@ -73,13 +73,14 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: lts/*
           cache: npm
 
       # vsce comes from the repo's own pinned dependency rather than a floating
       # `npx @vscode/vsce`, so the tool that publishes is the one that was tested.
-      - name: Install npm 12
-        run: npm install --global npm@12.2.0
+      - name: Install the npm version named by packageManager
+        shell: bash
+        run: npm install --global "$(node -p "require('./package.json').packageManager")"
 
       - name: Install dependencies
         run: npm ci
@@ -140,11 +141,12 @@ jobs:
 
       - name: Summary
         run: |
+          item="$(node -p "const p = require('./package.json'); p.publisher + '.' + p.name")"
           {
             echo "## Published"
             echo
             echo "- Tag: \`$RELEASE_TAG\`"
-            echo "- Listing: https://marketplace.visualstudio.com/items?itemName=nao7sep.repofocus"
+            echo "- Listing: https://marketplace.visualstudio.com/items?itemName=$item"
             echo
             echo "The GitHub release is still a **draft** — publishing it there is a separate, manual step."
           } >> "$GITHUB_STEP_SUMMARY"

@@ -1,5 +1,10 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { compileAlwaysShowConfiguration } from '../src/alwaysShow';
+import {
+  compileAlwaysShowConfiguration,
+  MAX_ALWAYS_SHOW_PATTERN_LENGTH,
+  MAX_ALWAYS_SHOW_PATTERNS,
+} from '../src/alwaysShow';
 
 function matchesAlwaysShow(path: string, patterns: readonly string[]): boolean {
   return compileAlwaysShowConfiguration(patterns).matches(path);
@@ -71,12 +76,24 @@ describe('matchesAlwaysShow', () => {
     expect(matches('company')).toBe(false);
   });
 
+  // The settings schema rejects oversized values in the editor; the runtime bound
+  // catches synced or hand-edited values that bypass it, so the two must agree.
+  it('bounds patterns exactly as the contributed settings schema does', () => {
+    const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+      contributes: { configuration: { properties: Record<string, { maxItems: number; items: { maxLength: number } }> } };
+    };
+    const schema = manifest.contributes.configuration.properties['repofocus.alwaysShow'];
+
+    expect(schema.maxItems).toBe(MAX_ALWAYS_SHOW_PATTERNS);
+    expect(schema.items.maxLength).toBe(MAX_ALWAYS_SHOW_PATTERN_LENGTH);
+  });
+
   it('reads synced configuration beyond the pattern bounds as the empty built-in', () => {
-    const tooMany = Array.from({ length: 101 }, (_, index) => `repo-${index}`);
-    const tooLong = ['x'.repeat(513)];
+    const tooMany = Array.from({ length: MAX_ALWAYS_SHOW_PATTERNS + 1 }, (_, index) => `repo-${index}`);
+    const tooLong = ['x'.repeat(MAX_ALWAYS_SHOW_PATTERN_LENGTH + 1)];
 
     expect(compileAlwaysShowConfiguration(tooMany).matches('repo-0')).toBe(false);
-    expect(compileAlwaysShowConfiguration(tooLong).matches('x'.repeat(513))).toBe(false);
+    expect(compileAlwaysShowConfiguration(tooLong).matches(tooLong[0])).toBe(false);
   });
 
   it.each([

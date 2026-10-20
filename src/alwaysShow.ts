@@ -42,8 +42,8 @@ export interface AlwaysShowPatterns {
 }
 
 export function validateAlwaysShowPatterns(value: unknown): AlwaysShowPatterns {
-  // An invalid set reads as its built-in per config-sets-conventions; the
-  // caller logs the warning.
+  // An invalid set reads as the built-in empty list rather than half-applying;
+  // the caller logs the warning.
   if (!Array.isArray(value)) {
     return { patternCount: 0, patterns: [], valid: false };
   }

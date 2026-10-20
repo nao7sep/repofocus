@@ -1,4 +1,4 @@
-/** The extension's presentation boundary, per the error-handling conventions. */
+/** The only place that turns failures into user-facing text, so raw error details never reach a notification. */
 export type FailedOperation = 'compatibility' | 'copy-diagnostics' | 'open-documentation' | 'toggle';
 
 const incompatibleMessage = 'RepoFocus stopped filtering because VS Code\'s internal visibility '

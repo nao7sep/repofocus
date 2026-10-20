@@ -73,8 +73,9 @@ async function start(
   // disposes these subscriptions, so stopping cannot re-show repositories or
   // write settings. Each owner only stops its local timers and work.
   context.subscriptions.push(nativeVisibilityCommands);
-  const manifest = context.extension.packageJSON as { version?: unknown };
+  const manifest = context.extension.packageJSON as { version?: unknown; homepage?: unknown };
   const extensionVersion = typeof manifest.version === 'string' ? manifest.version : 'unknown';
+  const documentationUrl = typeof manifest.homepage === 'string' ? manifest.homepage : undefined;
 
   const actionability = new Map<string, RepositoryActionability>();
   let alwaysShow = readAlwaysShowConfiguration(logger);
@@ -103,16 +104,14 @@ async function start(
       void vscode.window.showErrorMessage(
         describeFailure('compatibility', error),
         'Copy Diagnostics',
-        'Open Documentation',
+        ...(documentationUrl ? ['Open Documentation'] : []),
         'Show Output',
       ).then(async selection => {
         if (selection === 'Copy Diagnostics') {
           void vscode.commands.executeCommand('repofocus.copyDiagnostics');
-        } else if (selection === 'Open Documentation') {
+        } else if (selection === 'Open Documentation' && documentationUrl) {
           try {
-            await vscode.env.openExternal(vscode.Uri.parse(
-              'https://github.com/nao7sep/repofocus#compatibility-and-safety',
-            ));
+            await vscode.env.openExternal(vscode.Uri.parse(documentationUrl));
           } catch (openError) {
             logger.error('Opening the documentation failed.', openError);
             void vscode.window.showErrorMessage(describeFailure('open-documentation', openError));
