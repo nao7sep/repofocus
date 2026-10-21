@@ -132,7 +132,6 @@
   "allowScripts": {
     "@vscode/vsce-sign@2.1.0": false,
     "esbuild@0.28.2": false,
-    "fsevents@2.3.3": false,
-    "keytar@7.9.0": false
+    "fsevents@2.3.3": false
   }
 }
