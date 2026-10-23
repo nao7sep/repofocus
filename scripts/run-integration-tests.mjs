@@ -26,6 +26,17 @@ async function temporaryRoot(prefix) {
   return path;
 }
 
+async function testProfile() {
+  const profile = await temporaryRoot('repofocus-user-data-');
+  await mkdir(join(profile, 'User'));
+  // These tests exercise Git and SCM only; do not start account-backed AI services.
+  await writeFile(join(profile, 'User', 'settings.json'), JSON.stringify({
+    'chat.disableAIFeatures': true,
+    'telemetry.telemetryLevel': 'off',
+  }));
+  return profile;
+}
+
 function git(repositoryPath, ...args) {
   execFileSync('git', args, { cwd: repositoryPath, stdio: 'ignore' });
 }
@@ -96,8 +107,13 @@ try {
     },
     launchArgs: [
       fixtureRoot,
-      `--user-data-dir=${await temporaryRoot('repofocus-user-data-')}`,
+      `--user-data-dir=${await testProfile()}`,
       `--extensions-dir=${await temporaryRoot('repofocus-extensions-')}`,
+      '--use-inmemory-secretstorage',
+      '--use-mock-keychain',
+      // Keep automated RPC checks responsive when the developer uses another window.
+      '--disable-renderer-backgrounding',
+      '--disable-background-timer-throttling',
       '--disable-workspace-trust',
       '--skip-welcome',
       '--skip-release-notes',
@@ -134,8 +150,13 @@ try {
     },
     launchArgs: [
       workspaceFile,
-      `--user-data-dir=${await temporaryRoot('repofocus-user-data-')}`,
+      `--user-data-dir=${await testProfile()}`,
       `--extensions-dir=${await temporaryRoot('repofocus-extensions-')}`,
+      '--use-inmemory-secretstorage',
+      '--use-mock-keychain',
+      // Keep automated RPC checks responsive when the developer uses another window.
+      '--disable-renderer-backgrounding',
+      '--disable-background-timer-throttling',
       '--disable-workspace-trust',
       '--skip-welcome',
       '--skip-release-notes',

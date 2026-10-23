@@ -252,9 +252,7 @@ export async function run(): Promise<void> {
   await configuration.update('alwaysShow', ['*'], vscode.ConfigurationTarget.Workspace);
   await waitFor('all repositories to match', () => api.git.repositories.every(r => api.getActionability(r)?.actionable) ? true : undefined);
   await api.waitForSettled(); await assertNativeVisible(api.git.repositories);
-  for (const row of (await nativeState()).visible) {
-    if (row.id !== nativeBeta.id) await vscode.commands.executeCommand(`workbench.scm.action.toggleRepositoryVisibility.${row.id}`);
-  }
+  await vscode.commands.executeCommand('repofocus.test.selectRepository', nativeBeta.id);
   await waitFor('beta selection', () => beta.ui.selected ? true : undefined);
   await vscode.commands.executeCommand('repofocus.refresh');
   await assertNativeVisible(api.git.repositories);
@@ -407,10 +405,21 @@ export async function run(): Promise<void> {
 
   await vscode.commands.executeCommand('git.close', alpha.rootUri);
   await waitFor('alpha repository to close', () => repositoryAt(api, alphaPath) ? undefined : true);
+  await api.waitForSettled();
+  await assertNativeVisible(api.git.repositories.filter(repository => api.getActionability(repository)?.actionable !== false));
   await openRepository(alphaPath);
   let reopenedAlpha = await waitFor('alpha repository to reopen', () => repositoryAt(api, alphaPath));
   await api.waitForSettled();
   assert.equal(api.isHiddenByRepoFocus(reopenedAlpha), true, 'A clean repository reopened after activation must be hidden.');
+
+  await assertNativeVisible(api.git.repositories.filter(repository => api.getActionability(repository)?.actionable !== false));
+
+  // A settled external mode reset must reapply the filter without losing identities.
+  const scm = vscode.workspace.getConfiguration('scm');
+  await scm.update('repositories.selectionMode', 'single', vscode.ConfigurationTarget.Global);
+  await scm.update('repositories.selectionMode', undefined, vscode.ConfigurationTarget.Global);
+  await api.waitForSettled();
+  await assertNativeVisible(api.git.repositories.filter(repository => api.getActionability(repository)?.actionable !== false));
 
   // Every other condition that keeps a repository visible, and every state that
   // stays hidden, through VS Code's real Git reporting.
@@ -498,6 +507,9 @@ export async function run(): Promise<void> {
     }) ? true : undefined,
   );
 
+  await api.waitForSettled();
+  await assertNativeVisible(api.git.repositories.filter(repository => api.getActionability(repository)?.actionable !== false));
+
   // A mixed-provider window stands down before any global reset. Existing
   // visibility remains unchanged; Refresh resumes once the foreign provider leaves.
   const otherProvider = vscode.scm.createSourceControl(
@@ -518,8 +530,10 @@ export async function run(): Promise<void> {
     }
     await new Promise(resolve => setTimeout(resolve, 100));
   }
+  const beforeStandDown = await nativeState();
   await vscode.commands.executeCommand('repofocus.refresh');
   await api.waitForSettled();
+  assert.deepEqual((await nativeState()).visible, beforeStandDown.visible);
   assert.equal(api.isHiddenByRepoFocus(reopenedAlpha), true, 'Stand-down must not reset existing hidden Git repositories.');
   await vscode.commands.executeCommand('git.close', reopenedAlpha.rootUri);
   await waitFor('alpha to close beside the non-Git provider', () => repositoryAt(api, alphaPath) ? undefined : true);
@@ -567,11 +581,14 @@ export async function run(): Promise<void> {
   await api.waitForSettled();
   assert.equal(api.isHiddenByRepoFocus(reopenedAlpha), false);
   assert.equal(api.isHiddenByRepoFocus(beta), false);
+  await assertNativeVisible(api.git.repositories);
 
   await vscode.commands.executeCommand('repofocus.toggle');
   await api.waitForSettled();
   assert.equal(api.isHiddenByRepoFocus(reopenedAlpha), true, 'The clean repository must hide when filtering resumes.');
   assert.equal(api.isHiddenByRepoFocus(beta), false, 'The actionable repository must remain visible when filtering resumes.');
+
+  await assertNativeVisible(api.git.repositories.filter(repository => api.getActionability(repository)?.actionable !== false));
 
   // Every reset in this run returned the selection mode to its default, so no
   // user or workspace value for it remains.
