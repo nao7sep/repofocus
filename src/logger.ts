@@ -1,4 +1,4 @@
-export type LogLevel = 'debug' | 'error' | 'info' | 'warn';
+export type LogLevel = 'error' | 'info' | 'warn';
 
 export interface LogSink {
   appendLine(value: string): void;
@@ -17,14 +17,7 @@ function serializeError(error: unknown, seen = new Set<unknown>()): unknown {
 }
 
 export class Logger {
-  constructor(
-    private readonly sink: LogSink,
-    private readonly debugEnabled: boolean,
-  ) {}
-
-  debug(message: string, fields: Readonly<Record<string, unknown>> = {}): void {
-    if (this.debugEnabled) this.write('debug', message, fields);
-  }
+  constructor(private readonly sink: LogSink) {}
 
   info(message: string, fields: Readonly<Record<string, unknown>> = {}): void {
     this.write('info', message, fields);

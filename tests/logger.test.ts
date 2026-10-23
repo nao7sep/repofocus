@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Logger } from '../src/logger';
 
-function capture(debugEnabled = false): { lines: string[]; logger: Logger } {
+function capture(): { lines: string[]; logger: Logger } {
   const lines: string[] = [];
-  return { lines, logger: new Logger({ appendLine: line => lines.push(line) }, debugEnabled) };
+  return { lines, logger: new Logger({ appendLine: line => lines.push(line) }) };
 }
 
 describe('Logger', () => {
@@ -21,7 +21,7 @@ describe('Logger', () => {
 
   it('falls back to the host console when the output channel is closed', () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const logger = new Logger({ appendLine: () => { throw new Error('closed'); } }, false);
+    const logger = new Logger({ appendLine: () => { throw new Error('closed'); } });
 
     expect(() => logger.info('Stopping')).not.toThrow();
     expect(consoleError).toHaveBeenCalledTimes(2);
@@ -68,15 +68,5 @@ describe('Logger', () => {
       repository: '/work/alpha',
       error: { type: 'RangeError', message: 'bad count' },
     });
-  });
-
-  it('emits debug events only when explicitly enabled', () => {
-    const disabled = capture();
-    const enabled = capture(true);
-    disabled.logger.debug('Hidden');
-    enabled.logger.debug('Visible');
-
-    expect(disabled.lines).toEqual([]);
-    expect(JSON.parse(enabled.lines[0] ?? '')).toMatchObject({ level: 'debug', message: 'Visible' });
   });
 });

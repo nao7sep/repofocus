@@ -49,7 +49,7 @@ async function activateGit(): Promise<GitApi> {
 export async function activate(context: vscode.ExtensionContext): Promise<RepoFocusExtensionApi> {
   const output = vscode.window.createOutputChannel('RepoFocus');
   context.subscriptions.push(output);
-  const logger = new Logger(output, context.extensionMode === vscode.ExtensionMode.Development);
+  const logger = new Logger(output);
   try {
     return await start(context, output, logger);
   } catch (error) {
