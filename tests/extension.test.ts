@@ -1,11 +1,14 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import type { ExtensionContext } from 'vscode';
 import type { RepoFocusExtensionApi } from '../src/extension';
+import { AlwaysShowMatcher } from '../src/alwaysShowMatcher';
 import { describeUnsavedFiltering } from '../src/userMessages';
 import { selectionModeCommands, visibilityCommandPrefix } from '../src/visibilityCommandResolver';
 
 const host = vi.hoisted(() => ({
   api: {} as unknown,
+  folderListeners: new Set<() => void>(),
+  relative: (path: string) => path,
   errorSelection: undefined as string | undefined,
   openExternal: async () => true,
   execute: async (_command: string): Promise<void> => {},
@@ -43,7 +46,11 @@ vi.mock('vscode', () => ({
     getConfiguration: (section: string) => ({
       get: (_key: string, fallback: unknown) => section === 'scm' ? host.mode : fallback,
     }),
-    asRelativePath: (path: string) => path,
+    onDidChangeWorkspaceFolders: (listener: () => void) => {
+      host.folderListeners.add(listener);
+      return { dispose: () => host.folderListeners.delete(listener) };
+    },
+    asRelativePath: (path: string) => host.relative(path),
     onDidChangeConfiguration: (listener: (event: { affectsConfiguration(key: string): boolean }) => unknown) => {
       host.listeners.add(listener);
       return { dispose: () => host.listeners.delete(listener) };
@@ -62,8 +69,11 @@ afterEach(() => {
   try {
     stopLikeHost();
     host.listeners.clear();
+    host.folderListeners.clear();
+    host.relative = path => path;
     host.errorSelection = undefined;
     host.openExternal = async () => true;
+    vi.restoreAllMocks();
     host.warnings = [];
     host.errors = [];
     host.logs = [];
@@ -262,7 +272,7 @@ it('suppresses an old failed-save warning when three toggles return to the same 
   let stored: unknown;
   host.saveStoredValue = async value => {
     saves += 1;
-    if (saves === 1) throw new Error('first save failed');
+    if (saves === 1) { await held; throw new Error('first save failed'); }
     stored = value;
   };
 
@@ -272,16 +282,36 @@ it('suppresses an old failed-save warning when three toggles return to the same 
   const second = toggle();
   const third = toggle();
   await vi.advanceTimersByTimeAsync(0);
-  expect(stored).toBe(false);
   release();
   await vi.advanceTimersByTimeAsync(0);
   await Promise.all([first, second, third]);
 
+  expect(stored).toBe(false);
   expect(runtime!.isFilteringEnabled()).toBe(false);
   expect(host.warnings).toEqual([]);
   expect(host.errors).toEqual([]);
 });
 
+
+it('reevaluates workspace-relative candidates when non-Git roots are added, renamed, or removed', async () => {
+  vi.useFakeTimers();
+  // The matcher owns cache/worker invalidation tests; this boundary test checks
+  // that workspace events publish the new path through the real visibility owner.
+  const evaluate = vi.spyOn(AlwaysShowMatcher.prototype, 'evaluate').mockImplementation((_key, path) => ({
+    kind: 'matched', matches: path === 'workspace/alpha',
+  }));
+  await activateFixture();
+  await vi.advanceTimersByTimeAsync(1000); await runtime!.waitForSettled();
+  expect(runtime!.git.repositories.every(r => runtime!.isHiddenByRepoFocus(r))).toBe(true);
+  for (const prefix of ['workspace', 'renamed', '']) {
+    host.relative = path => prefix + path;
+    host.folderListeners.forEach(listener => listener());
+    await runtime!.waitForSettled();
+    const alpha = runtime!.git.repositories[0];
+    expect(runtime!.isHiddenByRepoFocus(alpha)).toBe(prefix !== 'workspace');
+    expect(evaluate).toHaveBeenCalledWith(alpha.rootUri.toString(), prefix + '/alpha', expect.any(Function));
+  }
+});
 
 it.each([false, true, 'reject'])('reports only unsuccessful documentation opening (%s)', async result => {
   vi.useFakeTimers(); await activateFixture();

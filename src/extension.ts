@@ -90,7 +90,8 @@ async function start(
   const reconciler = new VisibilityReconciler({
     toggle: command => nativeVisibilityCommands.execute(command),
     resetToAllVisible: async () => {
-      logger.warn('Recovering an ambiguous native visibility result with an all-visible reset.');
+      logger.warn('Recovering a failed native visibility application with an all-visible reset.');
+      await visibility.confirmSupportedForRecovery();
       await nativeVisibilityCommands.waitForIdle(NATIVE_VISIBILITY_COMMAND_TIMEOUT_MILLISECONDS);
       await nativeVisibilityResetter.reset();
     },
@@ -167,7 +168,8 @@ async function start(
       if (reason === 'other-scm-providers') {
         void vscode.window.showWarningMessage(
           'RepoFocus supports windows whose Source Control providers are all Git repositories. '
-          + 'Filtering is paused while another provider is present.',
+          + 'Filtering is paused while another provider is present. '
+          + 'Show hidden repositories in Source Control\'s Repositories view.',
         );
       }
     },
@@ -326,7 +328,6 @@ async function start(
   const waitForSettled = async (): Promise<void> => {
     await alwaysShowMatcher.waitForIdle();
     await visibility.waitForIdle();
-    await reconciler.waitForIdle();
   };
 
   let toggleRevision = 0;
@@ -359,10 +360,11 @@ async function start(
       alwaysShow = readAlwaysShowConfiguration(logger);
       alwaysShowMatcher.configure(alwaysShow);
       evaluateAll();
-      visibility.retryIfUnavailable();
+      visibility.refresh();
       await waitForSettled();
     }),
     vscode.commands.registerCommand('repofocus.copyDiagnostics', copyDiagnostics),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => evaluateAll()),
     vscode.workspace.onDidChangeConfiguration(event => {
       if (!event.affectsConfiguration('repofocus.alwaysShow')) return;
       alwaysShow = readAlwaysShowConfiguration(logger);

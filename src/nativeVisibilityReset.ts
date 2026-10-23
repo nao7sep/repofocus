@@ -87,13 +87,13 @@ export async function resetNativeRepositoryVisibility(
   if (!Number.isSafeInteger(timeoutMilliseconds) || timeoutMilliseconds < 1) {
     throw new Error('Native visibility reset timeout must be a positive safe integer.');
   }
-  const deadline = Date.now() + timeoutMilliseconds;
+  const deadline = performance.now() + timeoutMilliseconds;
   await setSelectionMode(options, 'single', deadline);
   await setSelectionMode(options, 'multiple', deadline);
 }
 
 function remainingTime(deadline: number): number {
-  return Math.max(0, deadline - Date.now());
+  return Math.max(0, Math.ceil(deadline - performance.now()));
 }
 
 function disposedError(): Error {

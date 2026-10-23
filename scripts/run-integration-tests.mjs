@@ -3,7 +3,8 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runTests } from '@vscode/test-electron';
+import { prepareOracleHost } from './native-state-oracle.mjs';
+import { downloadAndUnzipVSCode, runTests } from '@vscode/test-electron';
 
 const projectRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const extensionDevelopmentPath = resolve(
@@ -44,6 +45,11 @@ try {
     throw new Error('REPOFOCUS_INTEGRATION_REPOSITORY_COUNT must be an integer of at least 4.');
   }
 
+  const oracleExecutable = await prepareOracleHost(
+    vscodeExecutablePath ?? await downloadAndUnzipVSCode(vscodeVersion),
+    await temporaryRoot('repofocus-oracle-host-'),
+  );
+
   // Every Git process below, the Extension Host and its built-in Git extension
   // inherit this environment, so the developer's global and system Git
   // configuration (hooks, signing, ignores, attributes) never applies. Git finds
@@ -79,7 +85,7 @@ try {
   execFileSync('git', ['clone', alphaRemotePath, alphaUpdaterPath], { stdio: 'ignore' });
 
   await runTests({
-    ...(vscodeExecutablePath ? { vscodeExecutablePath } : { version: vscodeVersion }),
+    vscodeExecutablePath: oracleExecutable,
     extensionDevelopmentPath,
     extensionTestsPath: join(projectRoot, 'dist-tests', 'integration.js'),
     extensionTestsEnv: {
@@ -91,6 +97,7 @@ try {
     launchArgs: [
       fixtureRoot,
       `--user-data-dir=${await temporaryRoot('repofocus-user-data-')}`,
+      `--extensions-dir=${await temporaryRoot('repofocus-extensions-')}`,
       '--disable-workspace-trust',
       '--skip-welcome',
       '--skip-release-notes',
@@ -118,7 +125,7 @@ try {
   );
 
   await runTests({
-    ...(vscodeExecutablePath ? { vscodeExecutablePath } : { version: vscodeVersion }),
+    vscodeExecutablePath: oracleExecutable,
     extensionDevelopmentPath,
     extensionTestsPath: join(projectRoot, 'dist-tests', 'multiRoot.js'),
     extensionTestsEnv: {
@@ -128,6 +135,7 @@ try {
     launchArgs: [
       workspaceFile,
       `--user-data-dir=${await temporaryRoot('repofocus-user-data-')}`,
+      `--extensions-dir=${await temporaryRoot('repofocus-extensions-')}`,
       '--disable-workspace-trust',
       '--skip-welcome',
       '--skip-release-notes',

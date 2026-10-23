@@ -79,7 +79,7 @@ describe('mapVisibilityCommandsInOrder', () => {
     expect(DEFAULT_TOTAL_PROBE_TIMEOUT_MILLISECONDS).toBe(120_000);
   });
 
-  it('allows a slow native focus transfer to settle', async () => {
+  it.each([-86400000, 86400000])('allows slow focus transfer despite a wall-clock jump (%s)', async jump => {
     const names = ['alpha', 'beta'];
     const world = nativeWorld(names, names, 'beta', 5_000);
     const mapping = mapVisibilityCommandsInOrder(
@@ -89,6 +89,7 @@ describe('mapVisibilityCommandsInOrder', () => {
     );
     const result = expect(mapping).resolves.toHaveLength(2);
 
+    vi.setSystemTime(Date.now() + jump);
     await vi.advanceTimersByTimeAsync(5_000);
     await result;
   });

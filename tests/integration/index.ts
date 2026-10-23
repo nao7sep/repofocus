@@ -1,3 +1,4 @@
+import { assertNativeVisible, nativeState } from './nativeState';
 import { strict as assert } from 'node:assert';
 import { execFileSync } from 'node:child_process';
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -66,6 +67,7 @@ async function expectShownFor(
   );
   await api.waitForSettled();
   assert.equal(api.isHiddenByRepoFocus(repository), false, `${description}: the repository must be visible.`);
+  assert((await nativeState()).visible.some(row => row.uri === repository.rootUri.toString()), description);
 }
 
 async function expectHidden(
@@ -78,6 +80,8 @@ async function expectHidden(
     api.getActionability(repository)?.actionable === false && api.isHiddenByRepoFocus(repository)
       ? true : undefined,
   );
+  await api.waitForSettled();
+  assert(!(await nativeState()).visible.some(row => row.uri === repository.rootUri.toString()), description);
 }
 
 export async function run(): Promise<void> {
@@ -181,6 +185,8 @@ export async function run(): Promise<void> {
     );
   }
 
+  await api.waitForSettled();
+  await assertNativeVisible([]);
   const before = api.git.repositories.length;
   assert.equal(before, expectedRepositoryCount);
   assert(
@@ -216,6 +222,55 @@ export async function run(): Promise<void> {
     'mapped',
     'Diagnostics must distinguish a mapped session from one that is merely waiting.',
   );
+
+  // The oracle observes the workbench service, not RepoFocus's bookkeeping.
+  await vscode.commands.executeCommand('repofocus.toggle');
+  await api.waitForSettled();
+  await assertNativeVisible(api.git.repositories);
+  const allNative = await nativeState();
+  const nativeAlpha = allNative.visible.find(row => row.uri === alpha.rootUri.toString())!;
+  const nativeBeta = allNative.visible.find(row => row.uri === beta.rootUri.toString())!;
+  assert(nativeAlpha && nativeBeta);
+  await vscode.commands.executeCommand('repofocus.toggle');
+  await api.waitForSettled();
+  await assertNativeVisible([]);
+  await vscode.commands.executeCommand(`workbench.scm.action.toggleRepositoryVisibility.${nativeAlpha.id}`);
+  await assertNativeVisible([alpha]);
+  await writeFile(join(alphaPath, 'tracked.txt'), 'manual reveal then work\n');
+  await alpha.status();
+  await waitFor('manual-reveal repository to become actionable', () => api.getActionability(alpha)?.actionable ? true : undefined);
+  await api.waitForSettled(); await assertNativeVisible([alpha]);
+  await vscode.commands.executeCommand(`workbench.scm.action.toggleRepositoryVisibility.${nativeAlpha.id}`);
+  await assertNativeVisible([]);
+  await vscode.commands.executeCommand('repofocus.refresh');
+  await assertNativeVisible([alpha]);
+  git(alphaPath, 'restore', 'tracked.txt'); await alpha.status();
+  await expectHidden(api, alpha, 'manual-reveal fixture to become clean');
+  await api.waitForSettled(); await assertNativeVisible([]);
+
+  // Keep beta eligible and select it through the native surface before Refresh.
+  await configuration.update('alwaysShow', ['*'], vscode.ConfigurationTarget.Workspace);
+  await waitFor('all repositories to match', () => api.git.repositories.every(r => api.getActionability(r)?.actionable) ? true : undefined);
+  await api.waitForSettled(); await assertNativeVisible(api.git.repositories);
+  for (const row of (await nativeState()).visible) {
+    if (row.id !== nativeBeta.id) await vscode.commands.executeCommand(`workbench.scm.action.toggleRepositoryVisibility.${row.id}`);
+  }
+  await waitFor('beta selection', () => beta.ui.selected ? true : undefined);
+  await vscode.commands.executeCommand('repofocus.refresh');
+  await assertNativeVisible(api.git.repositories);
+  assert.equal((await nativeState()).selected?.uri, beta.rootUri.toString());
+  await configuration.update('alwaysShow', [], vscode.ConfigurationTarget.Workspace);
+  await waitFor('all repositories to become clean', () => api.git.repositories.every(r => api.getActionability(r)?.actionable === false) ? true : undefined);
+  await api.waitForSettled(); await assertNativeVisible([]);
+
+  // A command can succeed without changing native visibility. Deliberately
+  // suppress one effect after mapping to prove that the independent oracle fails.
+  await vscode.commands.executeCommand('repofocus.test.suppressToggle', nativeAlpha.id);
+  await vscode.commands.executeCommand('repofocus.refresh');
+  assert(api.isHiddenByRepoFocus(alpha), 'The ledger alone cannot catch the suppressed effect.');
+  await assert.rejects(assertNativeVisible([]), /Actual native SCM/);
+  await vscode.commands.executeCommand('repofocus.test.suppressToggle', null);
+  await vscode.commands.executeCommand('repofocus.refresh'); await assertNativeVisible([]);
 
   await appendFile(join(updaterPath, 'tracked.txt'), 'incoming\n', 'utf8');
   execFileSync('git', ['add', 'tracked.txt'], { cwd: updaterPath });
@@ -443,10 +498,8 @@ export async function run(): Promise<void> {
     }) ? true : undefined,
   );
 
-  // A mapping already made stays valid when a non-Git provider appears, because
-  // each Git repository keeps its own native command. The next mapping, after a
-  // repository opens or closes, cannot tell the providers apart, so RepoFocus
-  // stands down and shows every repository; Refresh resumes once it is gone.
+  // A mixed-provider window stands down before any global reset. Existing
+  // visibility remains unchanged; Refresh resumes once the foreign provider leaves.
   const otherProvider = vscode.scm.createSourceControl(
     'repofocus-integration',
     'Non-Git provider',
@@ -467,7 +520,7 @@ export async function run(): Promise<void> {
   }
   await vscode.commands.executeCommand('repofocus.refresh');
   await api.waitForSettled();
-  assert.equal(api.isHiddenByRepoFocus(reopenedAlpha), true, 'An existing mapping must keep filtering beside a non-Git provider.');
+  assert.equal(api.isHiddenByRepoFocus(reopenedAlpha), true, 'Stand-down must not reset existing hidden Git repositories.');
   await vscode.commands.executeCommand('git.close', reopenedAlpha.rootUri);
   await waitFor('alpha to close beside the non-Git provider', () => repositoryAt(api, alphaPath) ? undefined : true);
   await openRepository(alphaPath);

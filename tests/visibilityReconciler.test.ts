@@ -1,362 +1,80 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { RepositoryActionability } from '../src/actionability';
-import type { RepositoryIdentity, VisibilityMapping } from '../src/visibilityCommandResolver';
+import type { GitRepository } from '../src/gitApi';
 import { VisibilityReconciler } from '../src/visibilityReconciler';
 
-function repository(name: string): RepositoryIdentity {
-  return { rootUri: { toString: () => `file:///${name}` } };
+function fixture() {
+  const visible = new Set(['a', 'b']);
+  let selected: string | undefined = 'a';
+  const repositories = ['a', 'b'].map(name => ({
+    rootUri: { toString: () => name }, ui: { get selected() { return selected === name; } },
+  })) as GitRepository[];
+  const reset = vi.fn(async () => { visible.add('a'); visible.add('b'); selected = 'a'; });
+  const toggle = vi.fn(async (name: string) => {
+    if (visible.delete(name)) {
+      if (selected === name) selected = [...visible][0];
+    } else { visible.add(name); selected ??= name; }
+  });
+  const onError = vi.fn();
+  const reconciler = new VisibilityReconciler({ toggle, resetToAllVisible: reset, onError });
+  reconciler.setMappings(repositories.map(repository => ({ repository, command: repository.rootUri.toString() })));
+  return { visible, repositories, reset, toggle, reconciler, onError, selected: () => selected };
 }
 
-function mapping(target: RepositoryIdentity, command: string): VisibilityMapping {
-  return { repository: target, command };
-}
-
-const clean: RepositoryActionability = { actionable: false, reasons: [] };
-const changed: RepositoryActionability = {
-  actionable: true,
-  reasons: [{ kind: 'unstaged', count: 1 }],
-};
-
-describe('VisibilityReconciler', () => {
-  it('hides clean repositories and shows them when they become actionable', async () => {
-    const alpha = repository('alpha');
-    const toggle = vi.fn(async () => {});
-    const reconciler = new VisibilityReconciler({ toggle });
-    await reconciler.setFilteringEnabled(true);
-    reconciler.setMappings([mapping(alpha, 'toggle.alpha')]);
-    reconciler.setActionability(alpha, clean);
-    await reconciler.waitForIdle();
-
-    expect(toggle).toHaveBeenCalledWith('toggle.alpha');
-    expect(reconciler.isHiddenByRepoFocus(alpha)).toBe(true);
-
-    reconciler.setActionability(alpha, changed);
-    await reconciler.waitForIdle();
-    expect(toggle).toHaveBeenCalledTimes(2);
-    expect(reconciler.isHiddenByRepoFocus(alpha)).toBe(false);
+describe('VisibilityReconciler batch application', () => {
+  it('hides every clean repository, including the last one', async () => {
+    const f = fixture(); f.reconciler.setFilteringEnabled(true);
+    f.repositories.forEach(r => f.reconciler.setActionability(r, { actionable: false, reasons: [] }));
+    await f.reconciler.apply(f.repositories, undefined, () => true);
+    expect(f.visible.size).toBe(0); expect(f.reconciler.hiddenRepositoryCount).toBe(2);
   });
-
-  it('can hide every clean repository including the last one', async () => {
-    const alpha = repository('alpha');
-    const beta = repository('beta');
-    const toggle = vi.fn(async () => {});
-    const reconciler = new VisibilityReconciler({ toggle });
-    await reconciler.setFilteringEnabled(true);
-    reconciler.setMappings([mapping(alpha, 'toggle.alpha'), mapping(beta, 'toggle.beta')]);
-    reconciler.setActionability(alpha, clean);
-    reconciler.setActionability(beta, clean);
-    await reconciler.waitForIdle();
-
-    expect(toggle.mock.calls).toEqual([['toggle.alpha'], ['toggle.beta']]);
-    expect(reconciler.isHiddenByRepoFocus(alpha)).toBe(true);
-    expect(reconciler.isHiddenByRepoFocus(beta)).toBe(true);
+  it('restores eligible selection from the probe state before showing the rest', async () => {
+    const f = fixture(); await f.reconciler.hide('b');
+    await f.reconciler.apply(f.repositories, f.repositories[1], () => true);
+    expect(f.visible).toEqual(new Set(['a', 'b'])); expect(f.selected()).toBe('b');
   });
-
-  it('does not toggle when repeated state has the same desired visibility', async () => {
-    const alpha = repository('alpha');
-    const toggle = vi.fn(async () => {});
-    const reconciler = new VisibilityReconciler({ toggle });
-    await reconciler.setFilteringEnabled(true);
-    reconciler.setMappings([mapping(alpha, 'toggle.alpha')]);
-    reconciler.setActionability(alpha, clean);
-    reconciler.setActionability(alpha, clean);
-    await reconciler.waitForIdle();
-    reconciler.setActionability(alpha, clean);
-    await reconciler.waitForIdle();
-
-    expect(toggle).toHaveBeenCalledTimes(1);
+  it('does not restore a filtered selection', async () => {
+    const f = fixture(); f.reconciler.setFilteringEnabled(true);
+    f.reconciler.setActionability(f.repositories[1], { actionable: false, reasons: [] });
+    await f.reconciler.apply(f.repositories, f.repositories[1], () => true);
+    expect(f.visible).toEqual(new Set(['a'])); expect(f.selected()).toBe('a');
   });
-
-  it('reconciles directly from the visibility the probe left behind', async () => {
-    const alpha = repository('alpha');
-    const beta = repository('beta');
-    const toggle = vi.fn(async () => {});
-    const reconciler = new VisibilityReconciler({ toggle });
-    await reconciler.setFilteringEnabled(true);
-    // The probe hid alpha on its way to identifying beta.
-    await reconciler.hide('toggle.alpha');
-    reconciler.setMappings([mapping(alpha, 'toggle.alpha'), mapping(beta, 'toggle.beta')]);
-    reconciler.setActionability(alpha, changed);
-    reconciler.setActionability(beta, clean);
-    await reconciler.waitForIdle();
-
-    expect(toggle.mock.calls).toEqual([['toggle.alpha'], ['toggle.alpha'], ['toggle.beta']]);
-    expect(reconciler.isHiddenByRepoFocus(alpha)).toBe(false);
-    expect(reconciler.isHiddenByRepoFocus(beta)).toBe(true);
+  it('notifies only a changed desired visibility, without issuing commands', () => {
+    const f = fixture(); const changed = vi.fn(); f.reconciler.onDidChangeDesiredVisibility(changed);
+    f.reconciler.setActionability(f.repositories[0], { actionable: true, reasons: [] });
+    f.reconciler.setActionability(f.repositories[0], { actionable: true, reasons: [{ kind: 'unstaged', count: 3 }] });
+    expect(changed).toHaveBeenCalledOnce(); expect(f.toggle).not.toHaveBeenCalled();
   });
-
-  it('restores what the probe hid when filtering is not enabled', async () => {
-    const alpha = repository('alpha');
-    const toggle = vi.fn(async () => {});
-    const reconciler = new VisibilityReconciler({ toggle });
-
-    await reconciler.hide('toggle.alpha');
-    reconciler.setMappings([mapping(alpha, 'toggle.alpha')]);
-    await reconciler.waitForIdle();
-
-    expect(toggle).toHaveBeenCalledTimes(2);
-    expect(reconciler.isHiddenByRepoFocus(alpha)).toBe(false);
+  it('retains identities across resets and removes closed providers', async () => {
+    const f = fixture(); await f.reconciler.hide('a'); f.reconciler.acceptAllVisible();
+    expect(f.reconciler.hasMappings(f.repositories, ['a', 'b'])).toBe(true);
+    expect(f.reconciler.hiddenRepositoryCount).toBe(0);
+    f.reconciler.removeRepository(f.repositories[0]);
+    expect(f.reconciler.hasMappings([f.repositories[1]], ['b'])).toBe(true);
+    expect(f.reconciler.hasMappings(f.repositories, ['a', 'b'])).toBe(false);
   });
-
-  it('shows a probe-hidden repository until its actionability is known', async () => {
-    const alpha = repository('alpha');
-    const toggle = vi.fn(async () => {});
-    const reconciler = new VisibilityReconciler({ toggle });
-    await reconciler.setFilteringEnabled(true);
-
-    await reconciler.hide('toggle.alpha');
-    reconciler.setMappings([mapping(alpha, 'toggle.alpha')]);
-    await reconciler.waitForIdle();
-
-    expect(toggle).toHaveBeenCalledTimes(2);
-    expect(reconciler.isHiddenByRepoFocus(alpha)).toBe(false);
+  it('rejects replacement wrappers and retired commands even at equal counts', () => {
+    const f = fixture();
+    expect(f.reconciler.hasMappings([{ ...f.repositories[0] }, f.repositories[1]], ['a', 'b'])).toBe(false);
+    expect(f.reconciler.hasMappings(f.repositories, ['retired', 'b'])).toBe(false);
   });
-
-  it('restores commands the probe hid before any mapping is known', async () => {
-    const toggle = vi.fn(async () => {});
-    const reconciler = new VisibilityReconciler({ toggle });
-
-    // A probe that dies part-way: two commands toggled, neither attributed.
-    await reconciler.hide('toggle.one');
-    await reconciler.hide('toggle.two');
-    expect(reconciler.hiddenRepositoryCount).toBe(2);
-
-    await reconciler.restoreOwned();
-
-    expect(toggle.mock.calls).toEqual([
-      ['toggle.one'],
-      ['toggle.two'],
-      ['toggle.one'],
-      ['toggle.two'],
-    ]);
-    expect(reconciler.hiddenRepositoryCount).toBe(0);
-    expect(reconciler.compatible).toBe(true);
+  it('stops an obsolete application before its next mutation', async () => {
+    const f = fixture(); f.reconciler.setFilteringEnabled(true);
+    f.repositories.forEach(r => f.reconciler.setActionability(r, { actionable: false, reasons: [] }));
+    await expect(f.reconciler.apply(f.repositories, undefined, () => f.toggle.mock.calls.length === 0)).rejects.toThrow('changed');
+    expect(f.toggle).toHaveBeenCalledOnce();
   });
-
-  it('resets to all-visible without retrying when a hide rejects before changing visibility', async () => {
-    const failure = new Error('native command failed');
-    let visible = true;
-    const toggle = vi.fn().mockRejectedValue(failure);
-    const resetToAllVisible = vi.fn(async () => { visible = true; });
-    const reconciler = new VisibilityReconciler({ toggle, resetToAllVisible });
-
-    await expect(reconciler.hide('toggle.alpha')).rejects.toThrow(failure);
-    expect(visible).toBe(true);
-    expect(reconciler.hiddenRepositoryCount).toBe(0);
-    expect(reconciler.compatible).toBe(false);
-
-    await reconciler.restoreOwned();
-    expect(toggle).toHaveBeenCalledOnce();
-    expect(resetToAllVisible).toHaveBeenCalledOnce();
+  it.each([false, true])('recovers ambiguous toggles by reset, never inversion (effect: %s)', async effect => {
+    const f = fixture();
+    const toggle = vi.fn(async () => { if (effect) f.visible.delete('a'); throw new Error('failed'); });
+    const reconciler = new VisibilityReconciler({ toggle, resetToAllVisible: f.reset, onError: f.onError });
+    await expect(reconciler.hide('a')).rejects.toThrow('failed'); await reconciler.restoreOwned();
+    expect(toggle).toHaveBeenCalledOnce(); expect(f.reset).toHaveBeenCalledOnce();
+    expect(f.visible.size).toBe(2); expect(reconciler.compatible).toBe(false); expect(f.onError).toHaveBeenCalledOnce();
   });
-
-  it('resets to all-visible when a hide changes visibility and then rejects', async () => {
-    const failure = new Error('native command failed after mutation');
-    let visible = true;
-    const toggle = vi.fn(async () => {
-      visible = !visible;
-      throw failure;
-    });
-    const resetToAllVisible = vi.fn(async () => { visible = true; });
-    const reconciler = new VisibilityReconciler({ toggle, resetToAllVisible });
-
-    await expect(reconciler.hide('toggle.alpha')).rejects.toThrow(failure);
-
-    expect(visible).toBe(true);
-    expect(toggle).toHaveBeenCalledOnce();
-    expect(resetToAllVisible).toHaveBeenCalledOnce();
-    expect(reconciler.hiddenRepositoryCount).toBe(0);
-  });
-
-  it('drops ownership of a hidden repository that closes', async () => {
-    const alpha = repository('alpha');
-    const beta = repository('beta');
-    const toggle = vi.fn(async () => {});
-    const reconciler = new VisibilityReconciler({ toggle });
-    await reconciler.setFilteringEnabled(true);
-    reconciler.setMappings([mapping(alpha, 'toggle.alpha'), mapping(beta, 'toggle.beta')]);
-    reconciler.setActionability(alpha, clean);
-    reconciler.setActionability(beta, clean);
-    await reconciler.waitForIdle();
-    expect(reconciler.hiddenRepositoryCount).toBe(2);
-
-    // VS Code unregisters toggle.alpha along with the repository's provider.
-    reconciler.removeRepository(alpha);
-    expect(reconciler.hiddenRepositoryCount).toBe(1);
-
-    toggle.mockClear();
-    await reconciler.restoreOwned();
-
-    expect(toggle.mock.calls).toEqual([['toggle.beta']]);
-    expect(reconciler.hiddenRepositoryCount).toBe(0);
-    expect(reconciler.compatible).toBe(true);
-  });
-
-  it('reconciles a state update that arrives during an in-flight toggle', async () => {
-    const alpha = repository('alpha');
-    let releaseFirstToggle: (() => void) | undefined;
-    const firstToggle = new Promise<void>(resolve => { releaseFirstToggle = resolve; });
-    const toggle = vi.fn()
-      .mockImplementationOnce(() => firstToggle)
-      .mockResolvedValue(undefined);
-    const reconciler = new VisibilityReconciler({ toggle });
-    await reconciler.setFilteringEnabled(true);
-    reconciler.setMappings([mapping(alpha, 'toggle.alpha')]);
-    reconciler.setActionability(alpha, clean);
-    await vi.waitFor(() => expect(toggle).toHaveBeenCalledTimes(1));
-
-    reconciler.setActionability(alpha, changed);
-    releaseFirstToggle?.();
-    await reconciler.waitForIdle();
-
-    expect(toggle).toHaveBeenCalledTimes(2);
-    expect(reconciler.isHiddenByRepoFocus(alpha)).toBe(false);
-  });
-
-  it('stops reconciling and reports nothing once disposed', async () => {
-    const alpha = repository('alpha');
-    const beta = repository('beta');
-    let cancelFirstToggle: ((error: Error) => void) | undefined;
-    const firstToggle = new Promise<void>((_resolve, reject) => { cancelFirstToggle = reject; });
-    const toggle = vi.fn()
-      .mockImplementationOnce(() => firstToggle)
-      .mockResolvedValue(undefined);
-    const resetToAllVisible = vi.fn(async () => {});
-    const onError = vi.fn();
-    const reconciler = new VisibilityReconciler({ toggle, resetToAllVisible, onError });
-    await reconciler.setFilteringEnabled(true);
-    reconciler.setMappings([mapping(alpha, 'toggle.alpha'), mapping(beta, 'toggle.beta')]);
-    reconciler.setActionability(alpha, clean);
-    reconciler.setActionability(beta, clean);
-    await vi.waitFor(() => expect(toggle).toHaveBeenCalledTimes(1));
-
-    // VS Code rejects every command once it has cut the extension's connection.
-    reconciler.dispose();
-    cancelFirstToggle?.(new Error('Canceled'));
-    await reconciler.waitForIdle();
-    await reconciler.setFilteringEnabled(false);
-
-    expect(toggle).toHaveBeenCalledOnce();
-    expect(resetToAllVisible).not.toHaveBeenCalled();
-    expect(onError).not.toHaveBeenCalled();
-    expect(reconciler.enabled).toBe(false);
-  });
-
-  it('fails closed to filtering and resets all visibility after a toggle error', async () => {
-    const alpha = repository('alpha');
-    const beta = repository('beta');
-    const failure = new Error('native command failed');
-    const onError = vi.fn();
-    const visible = new Map([['toggle.alpha', true], ['toggle.beta', true]]);
-    const toggle = vi.fn(async (command: string) => {
-      if (command === 'toggle.beta') throw failure;
-      visible.set(command, !visible.get(command));
-    });
-    const resetToAllVisible = vi.fn(async () => {
-      for (const command of visible.keys()) visible.set(command, true);
-    });
-    const reconciler = new VisibilityReconciler({ toggle, resetToAllVisible, onError });
-    await reconciler.setFilteringEnabled(true);
-    reconciler.setMappings([mapping(alpha, 'toggle.alpha'), mapping(beta, 'toggle.beta')]);
-    reconciler.setActionability(alpha, clean);
-    reconciler.setActionability(beta, clean);
-    await reconciler.waitForIdle();
-
-    expect(reconciler.compatible).toBe(false);
-    expect(reconciler.enabled).toBe(false);
-    expect(onError.mock.calls[0][0]).toBe(failure);
-    expect([...visible.values()]).toEqual([true, true]);
-    expect(reconciler.isHiddenByRepoFocus(alpha)).toBe(false);
-    expect(reconciler.isHiddenByRepoFocus(beta)).toBe(false);
-    expect(toggle.mock.calls).toEqual([['toggle.alpha'], ['toggle.beta']]);
-    expect(resetToAllVisible).toHaveBeenCalledOnce();
-  });
-
-  it('reports how many commands are stranded when reporting a failure', async () => {
-    const alpha = repository('alpha');
-    const onError = vi.fn();
-    const toggle = vi.fn(async () => {});
-    const reconciler = new VisibilityReconciler({ toggle, onError });
-    await reconciler.setFilteringEnabled(true);
-    reconciler.setMappings([mapping(alpha, 'toggle.alpha')]);
-    reconciler.setActionability(alpha, clean);
-    await reconciler.waitForIdle();
-
-    await reconciler.failCompatibility(new Error('mapping changed'));
-
-    expect(onError.mock.calls[0][1]).toEqual({ strandedCommandCount: 1 });
-  });
-
-  it('restores owned repositories after an external compatibility failure', async () => {
-    const alpha = repository('alpha');
-    const toggle = vi.fn(async () => {});
-    const reconciler = new VisibilityReconciler({ toggle });
-    await reconciler.setFilteringEnabled(true);
-    reconciler.setMappings([mapping(alpha, 'toggle.alpha')]);
-    reconciler.setActionability(alpha, clean);
-    await reconciler.waitForIdle();
-
-    await reconciler.failCompatibility(new Error('mapping changed'));
-    reconciler.setActionability(alpha, clean);
-    await reconciler.waitForIdle();
-
-    expect(reconciler.compatible).toBe(false);
-    expect(toggle).toHaveBeenCalledTimes(2);
-    expect(reconciler.isHiddenByRepoFocus(alpha)).toBe(false);
-  });
-
-  it('restores repositories while disabled and reconciles current state when re-enabled', async () => {
-    const alpha = repository('alpha');
-    const toggle = vi.fn(async () => {});
-    const reconciler = new VisibilityReconciler({ toggle });
-    await reconciler.setFilteringEnabled(true);
-    reconciler.setMappings([mapping(alpha, 'toggle.alpha')]);
-    reconciler.setActionability(alpha, clean);
-    await reconciler.waitForIdle();
-
-    await reconciler.setFilteringEnabled(false);
-    reconciler.setActionability(alpha, clean);
-    await reconciler.waitForIdle();
-    expect(reconciler.enabled).toBe(false);
-    expect(reconciler.isHiddenByRepoFocus(alpha)).toBe(false);
-
-    await reconciler.setFilteringEnabled(true);
-    await reconciler.waitForIdle();
-    expect(reconciler.enabled).toBe(true);
-    expect(reconciler.isHiddenByRepoFocus(alpha)).toBe(true);
-    expect(toggle).toHaveBeenCalledTimes(3);
-  });
-
-  it('retries only the all-visible reset when filtering is turned off after the reset failed', async () => {
-    const alpha = repository('alpha');
-    const recoveryFailure = new Error('restore failed');
-    const onError = vi.fn();
-    const toggle = vi.fn()
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(recoveryFailure);
-    const resetToAllVisible = vi.fn()
-      .mockRejectedValueOnce(recoveryFailure)
-      .mockResolvedValue(undefined);
-    const reconciler = new VisibilityReconciler({ toggle, resetToAllVisible, onError });
-    await reconciler.setFilteringEnabled(true);
-    reconciler.setMappings([mapping(alpha, 'toggle.alpha')]);
-    reconciler.setActionability(alpha, clean);
-    await reconciler.waitForIdle();
-
-    await reconciler.setFilteringEnabled(false);
-    expect(onError).toHaveBeenCalledTimes(2);
-    expect(reconciler.isHiddenByRepoFocus(alpha)).toBe(true);
-    expect(reconciler.enabled).toBe(false);
-
-    // The ambiguous toggle is never inverted; only the reset is retried.
-    await reconciler.setFilteringEnabled(false);
-    expect(reconciler.isHiddenByRepoFocus(alpha)).toBe(false);
-    expect(reconciler.hiddenRepositoryCount).toBe(0);
-
-    await reconciler.setFilteringEnabled(true);
-    await reconciler.setFilteringEnabled(false);
-    expect(toggle).toHaveBeenCalledTimes(2);
-    expect(resetToAllVisible).toHaveBeenCalledTimes(2);
-    expect(reconciler.compatible).toBe(false);
+  it('allows explicit retry after recovery failure, but never acts on dispose', async () => {
+    const reset = vi.fn().mockRejectedValueOnce(new Error('reset failed')).mockResolvedValue(undefined);
+    const reconciler = new VisibilityReconciler({ toggle: async () => { throw new Error('failed'); }, resetToAllVisible: reset });
+    await expect(reconciler.hide('a')).rejects.toThrow(); await reconciler.restoreOwned();
+    expect(reset).toHaveBeenCalledTimes(2); reconciler.dispose(); await reconciler.restoreOwned(); expect(reset).toHaveBeenCalledTimes(2);
   });
 });

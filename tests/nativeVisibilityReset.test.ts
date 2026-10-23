@@ -32,13 +32,14 @@ describe('resetNativeRepositoryVisibility', () => {
     vi.useRealTimers();
   });
 
-  it('waits for both configuration transitions and restores multiple mode', async () => {
+  it.each([-86400000, 86400000])('uses elapsed time across both configuration transitions despite a clock jump (%s)', async jump => {
     const changed = modeEvent();
     let mode = 'multiple';
     const executeCommand = vi.fn(async (command: string) => {
       const next = command === selectionModeCommands.single ? 'single' : 'multiple';
       setTimeout(() => {
         mode = next;
+        vi.setSystemTime(Date.now() + jump);
         changed.fire();
       }, 5);
     });

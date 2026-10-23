@@ -53,15 +53,26 @@ export class OneShotHostOperation<T> {
  */
 export class NonOverlappingHostOperation<T> {
   private active: Promise<T> | undefined;
+  private generation: unknown;
 
-  wait(
+  async wait(
     start: () => PromiseLike<T>,
     timeoutMilliseconds: number,
     description: string,
+    generation?: unknown,
   ): Promise<T> {
+    const deadline = performance.now() + timeoutMilliseconds;
+    if (this.active && this.generation !== generation) {
+      // Join settlement, including rejection, but never consume another
+      // generation's snapshot or start a read while it is still pending.
+      await waitForHostOperation(this.active.then(() => {}, () => {}), timeoutMilliseconds, description);
+      timeoutMilliseconds = Math.ceil(deadline - performance.now());
+      if (timeoutMilliseconds < 1) throw new HostOperationTimeoutError(description, 0);
+    }
     if (!this.active) {
       const operation = Promise.resolve().then(start);
       this.active = operation;
+      this.generation = generation;
       void operation.then(
         () => { if (this.active === operation) this.active = undefined; },
         () => { if (this.active === operation) this.active = undefined; },

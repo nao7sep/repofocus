@@ -41,26 +41,26 @@ function selectedRepository(repositories: readonly GitRepository[]): GitReposito
   return selected.length === 1 ? selected[0] : undefined;
 }
 
-async function waitForSelectedRepository(
+export async function waitForSelectedRepository(
   repositories: readonly GitRepository[],
   timeoutMilliseconds: number,
   assertCurrent: () => void,
   previousKey?: string,
 ): Promise<GitRepository | undefined> {
-  const deadline = Date.now() + timeoutMilliseconds;
+  const deadline = performance.now() + timeoutMilliseconds;
   for (;;) {
     assertCurrent();
     const selected = selectedRepository(repositories);
     if (selected && (previousKey === undefined || selected.rootUri.toString() !== previousKey)) {
       return selected;
     }
-    if (Date.now() >= deadline) return undefined;
+    if (performance.now() >= deadline) return undefined;
     await new Promise(resolve => setTimeout(resolve, 10));
   }
 }
 
 /**
- * Maps opaque visibility commands to Git repositories in linear work without
+ * Maps opaque visibility commands to Git repositories with linearly many native calls without
  * assuming that the Git API and SCM command registry use the same order.
  *
  * First, all commands except one are hidden, which identifies the sole visible
@@ -91,10 +91,10 @@ export async function mapVisibilityCommandsInOrder(
     throw new Error('Visibility mapping timeout must be a positive safe integer.');
   }
 
-  const deadline = Date.now() + totalTimeoutMilliseconds;
+  const deadline = performance.now() + totalTimeoutMilliseconds;
   const assertCurrent = (): void => {
     if (timings.isCurrent?.() === false) throw new VisibilityProbeInterruptedError();
-    if (Date.now() >= deadline) {
+    if (performance.now() >= deadline) {
       throw new VisibilityProbeLimitError(
         `Native visibility mapping did not finish within ${totalTimeoutMilliseconds} milliseconds.`,
       );
@@ -109,7 +109,7 @@ export async function mapVisibilityCommandsInOrder(
 
   let current = await waitForSelectedRepository(
     repositories,
-    Math.min(selectionTimeoutMilliseconds, Math.max(1, deadline - Date.now())),
+    Math.min(selectionTimeoutMilliseconds, Math.max(1, deadline - performance.now())),
     assertCurrent,
   );
   if (!current) throw new VisibilityProbeError('Native repository focus did not settle.');
@@ -128,7 +128,7 @@ export async function mapVisibilityCommandsInOrder(
     assertCurrent();
     const next = await waitForSelectedRepository(
       repositories,
-      Math.min(selectionTimeoutMilliseconds, Math.max(1, deadline - Date.now())),
+      Math.min(selectionTimeoutMilliseconds, Math.max(1, deadline - performance.now())),
       assertCurrent,
       currentKey,
     );
