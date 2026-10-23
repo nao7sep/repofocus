@@ -6,6 +6,8 @@ import { selectionModeCommands, visibilityCommandPrefix } from '../src/visibilit
 
 const host = vi.hoisted(() => ({
   api: {} as unknown,
+  errorSelection: undefined as string | undefined,
+  openExternal: async () => true,
   execute: async (_command: string): Promise<void> => {},
   commands: [] as string[],
   mode: 'multiple',
@@ -23,7 +25,7 @@ vi.mock('vscode', () => ({
   extensions: { getExtension: () => ({ isActive: true, exports: { getAPI: () => host.api } }) },
   window: {
     createOutputChannel: () => ({ appendLine(line: string) { host.logs.push(line); }, show() {}, dispose() {} }),
-    showErrorMessage: async (message: string) => { host.errors.push(message); },
+    showErrorMessage: async (message: string) => { host.errors.push(message); return host.errorSelection; },
     showInformationMessage: async () => undefined,
     showWarningMessage: async (message: string) => { host.warnings.push(message); },
   },
@@ -35,6 +37,8 @@ vi.mock('vscode', () => ({
       return { dispose: () => host.handlers.delete(command) };
     },
   },
+  Uri: { parse: (url: string) => url },
+  env: { openExternal: () => host.openExternal() },
   workspace: {
     getConfiguration: (section: string) => ({
       get: (_key: string, fallback: unknown) => section === 'scm' ? host.mode : fallback,
@@ -58,6 +62,8 @@ afterEach(() => {
   try {
     stopLikeHost();
     host.listeners.clear();
+    host.errorSelection = undefined;
+    host.openExternal = async () => true;
     host.warnings = [];
     host.errors = [];
     host.logs = [];
@@ -113,7 +119,7 @@ async function activateFixture() {
   };
   subscriptions = [];
   const context = {
-    subscriptions, extensionMode: 1, extension: { packageJSON: { version: 'fixture' } },
+    subscriptions, extensionMode: 1, extension: { packageJSON: { version: 'fixture', homepage: 'https://example.invalid/docs' } },
     workspaceState: { get: () => true, update: (_key: string, value: unknown) => host.saveStoredValue(value) },
   } as unknown as ExtensionContext;
   const { activate } = await import('../src/extension');
@@ -274,4 +280,21 @@ it('suppresses an old failed-save warning when three toggles return to the same 
   expect(runtime!.isFilteringEnabled()).toBe(false);
   expect(host.warnings).toEqual([]);
   expect(host.errors).toEqual([]);
+});
+
+
+it.each([false, true, 'reject'])('reports only unsuccessful documentation opening (%s)', async result => {
+  vi.useFakeTimers(); await activateFixture();
+  host.errorSelection = 'Open Documentation';
+  host.openExternal = async () => {
+    // Avoid selecting an action on the follow-up notification in the mock.
+    host.errorSelection = undefined;
+    if (result === 'reject') throw new Error('browser unavailable');
+    return result === true;
+  };
+  host.execute = async command => { if (command !== 'setContext') throw new Error('native unavailable'); };
+  await vi.advanceTimersByTimeAsync(1000); await runtime!.waitForSettled();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(host.errors.some(message => message.includes('documentation'))).toBe(result !== true);
+  expect(host.logs.some(line => line.includes('Opening the documentation failed.'))).toBe(result !== true);
 });

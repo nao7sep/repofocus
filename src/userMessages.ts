@@ -1,8 +1,8 @@
 /** The only place that turns failures into user-facing text, so raw error details never reach a notification. */
 export type FailedOperation = 'compatibility' | 'copy-diagnostics' | 'open-documentation' | 'toggle';
 
-const incompatibleMessage = 'RepoFocus stopped filtering because VS Code\'s internal visibility '
-  + 'contract changed. Reload the window after copying diagnostics.';
+const incompatibleMessage = 'RepoFocus couldn\'t finish updating repository visibility. '
+  + 'See RepoFocus output for details. Reload the window to retry.';
 
 export function describeMappingState(state: string): string | undefined {
   switch (state) {

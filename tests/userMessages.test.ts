@@ -38,8 +38,13 @@ describe('describeFailure', () => {
     expect(message.length).toBeGreaterThan(0);
   });
 
-  it('reuses the incompatible mapping copy when filtering stops', () => {
-    expect(describeFailure('compatibility', hostileError())).toBe(describeMappingState('incompatible'));
+  it('explains the failed visibility update without inventing a cause', () => {
+    const message = describeFailure('compatibility', hostileError());
+    expect(message).toContain("couldn't finish updating repository visibility");
+    expect(message).toContain('output for details');
+    expect(message).toContain('Reload the window to retry');
+    expect(message).not.toContain('contract changed');
+    expect(describeMappingState('incompatible')).toBe(message);
   });
 
   it('names the clipboard when diagnostics cannot be copied', () => {

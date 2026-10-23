@@ -111,7 +111,9 @@ async function start(
           void vscode.commands.executeCommand('repofocus.copyDiagnostics');
         } else if (selection === 'Open Documentation' && documentationUrl) {
           try {
-            await vscode.env.openExternal(vscode.Uri.parse(documentationUrl));
+            if (!await vscode.env.openExternal(vscode.Uri.parse(documentationUrl))) {
+              throw new Error('VS Code could not open the documentation URL.');
+            }
           } catch (openError) {
             logger.error('Opening the documentation failed.', openError);
             void vscode.window.showErrorMessage(describeFailure('open-documentation', openError));
