@@ -442,6 +442,9 @@ export async function run(): Promise<void> {
       return repository && api.isHiddenByRepoFocus(repository);
     }) ? true : undefined,
   );
+  // The batch that hid them may still be hiding later repositories, alpha among
+  // them; let it finish so stand-down is judged against settled visibility.
+  await api.waitForSettled();
 
   // A mixed-provider window stands down before any global reset. Existing
   // visibility remains unchanged; Refresh resumes once the foreign provider leaves.
