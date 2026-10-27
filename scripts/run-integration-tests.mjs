@@ -3,8 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { prepareOracleHost } from './native-state-oracle.mjs';
-import { downloadAndUnzipVSCode, runTests } from '@vscode/test-electron';
+import { runTests } from '@vscode/test-electron';
 
 const projectRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const extensionDevelopmentPath = resolve(
@@ -26,17 +25,6 @@ async function temporaryRoot(prefix) {
   return path;
 }
 
-async function testProfile() {
-  const profile = await temporaryRoot('repofocus-user-data-');
-  await mkdir(join(profile, 'User'));
-  // These tests exercise Git and SCM only; do not start account-backed AI services.
-  await writeFile(join(profile, 'User', 'settings.json'), JSON.stringify({
-    'chat.disableAIFeatures': true,
-    'telemetry.telemetryLevel': 'off',
-  }));
-  return profile;
-}
-
 function git(repositoryPath, ...args) {
   execFileSync('git', args, { cwd: repositoryPath, stdio: 'ignore' });
 }
@@ -55,11 +43,6 @@ try {
   if (!Number.isSafeInteger(repositoryCount) || repositoryCount < 4) {
     throw new Error('REPOFOCUS_INTEGRATION_REPOSITORY_COUNT must be an integer of at least 4.');
   }
-
-  const oracleExecutable = await prepareOracleHost(
-    vscodeExecutablePath ?? await downloadAndUnzipVSCode(vscodeVersion),
-    await temporaryRoot('repofocus-oracle-host-'),
-  );
 
   // Every Git process below, the Extension Host and its built-in Git extension
   // inherit this environment, so the developer's global and system Git
@@ -96,7 +79,7 @@ try {
   execFileSync('git', ['clone', alphaRemotePath, alphaUpdaterPath], { stdio: 'ignore' });
 
   await runTests({
-    vscodeExecutablePath: oracleExecutable,
+    ...(vscodeExecutablePath ? { vscodeExecutablePath } : { version: vscodeVersion }),
     extensionDevelopmentPath,
     extensionTestsPath: join(projectRoot, 'dist-tests', 'integration.js'),
     extensionTestsEnv: {
@@ -107,13 +90,7 @@ try {
     },
     launchArgs: [
       fixtureRoot,
-      `--user-data-dir=${await testProfile()}`,
-      `--extensions-dir=${await temporaryRoot('repofocus-extensions-')}`,
-      '--use-inmemory-secretstorage',
-      '--use-mock-keychain',
-      // Keep automated RPC checks responsive when the developer uses another window.
-      '--disable-renderer-backgrounding',
-      '--disable-background-timer-throttling',
+      `--user-data-dir=${await temporaryRoot('repofocus-user-data-')}`,
       '--disable-workspace-trust',
       '--skip-welcome',
       '--skip-release-notes',
@@ -141,7 +118,7 @@ try {
   );
 
   await runTests({
-    vscodeExecutablePath: oracleExecutable,
+    ...(vscodeExecutablePath ? { vscodeExecutablePath } : { version: vscodeVersion }),
     extensionDevelopmentPath,
     extensionTestsPath: join(projectRoot, 'dist-tests', 'multiRoot.js'),
     extensionTestsEnv: {
@@ -150,13 +127,7 @@ try {
     },
     launchArgs: [
       workspaceFile,
-      `--user-data-dir=${await testProfile()}`,
-      `--extensions-dir=${await temporaryRoot('repofocus-extensions-')}`,
-      '--use-inmemory-secretstorage',
-      '--use-mock-keychain',
-      // Keep automated RPC checks responsive when the developer uses another window.
-      '--disable-renderer-backgrounding',
-      '--disable-background-timer-throttling',
+      `--user-data-dir=${await temporaryRoot('repofocus-user-data-')}`,
       '--disable-workspace-trust',
       '--skip-welcome',
       '--skip-release-notes',

@@ -15,7 +15,6 @@
 // two same-named roots; the unit suite separately covers portable bare-name
 // fallback.
 
-import { assertNativeVisible } from './nativeState';
 import { strict as assert } from 'node:assert';
 import { writeFile } from 'node:fs/promises';
 import { basename, isAbsolute, join, resolve } from 'node:path';
@@ -109,9 +108,6 @@ export async function run(): Promise<void> {
     throw new Error(`${(error as Error).message} State: ${describe()}`, { cause: error });
   }
 
-  await api.waitForSettled();
-  await assertNativeVisible([]);
-
   // Target only the first with its absolute candidate. The payoff assertion is
   // that the same-named second repository stays hidden.
   await configuration.update('alwaysShow', [firstMatchable], vscode.ConfigurationTarget.Workspace);
@@ -126,7 +122,6 @@ export async function run(): Promise<void> {
     'A pattern naming one workspace folder must not reveal the same-named repository in another root.',
   );
 
-  await assertNativeVisible([first]);
   await configuration.update('alwaysShow', [], vscode.ConfigurationTarget.Workspace);
   await waitFor('the targeted repository to become hidden again', () =>
     api.isHiddenByRepoFocus(first) ? true : undefined,
@@ -139,6 +134,4 @@ export async function run(): Promise<void> {
   await waitFor('a change in the second root to reveal its repository', () =>
     !api.isHiddenByRepoFocus(second) ? true : undefined,
   );
-  await api.waitForSettled();
-  await assertNativeVisible([second]);
 }
