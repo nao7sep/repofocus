@@ -156,16 +156,6 @@ export class VisibilityMappingCoordinator {
     // Preference publication must not wait for a held command or probe.
   }
 
-  /** Recovery cannot reset a newly mixed-provider window. Uses the same read
-   * owner, including after a failed or timed-out discovery. */
-  async confirmSupportedForRecovery(): Promise<void> {
-    const revision = ++this.revision;
-    if (this.disposed || !this.options.topologyReady()) throw new Error('Repository discovery is not ready for visibility recovery.');
-    const repositories = this.options.getRepositories();
-    const commands = await this.resolveSettledCommands(repositories.length, revision);
-    if (!commands || this.disposed || revision !== this.revision) throw new Error('Native providers are not ready for visibility recovery.');
-  }
-
   async waitForIdle(): Promise<void> {
     while (this.run) await this.run;
   }

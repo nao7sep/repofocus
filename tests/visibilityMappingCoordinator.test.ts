@@ -904,16 +904,13 @@ describe('VisibilityMappingCoordinator', () => {
     expect(native.visible.size).toBe(0); expect(coordinator.baselineEstablished).toBe(true);
   });
 
-  it('does not reset a newly mixed-provider window during reapplication or recovery', async () => {
+  it('does not reset a newly mixed-provider window during reapplication', async () => {
     const f = coordinatorFixture(['alpha', 'beta']);
     f.coordinator.requestRefresh(); await f.coordinator.waitForIdle();
     f.getCommands.mockResolvedValue([...f.native.discoveryCommands, `${visibilityCommandPrefix}scm99`]);
     f.reconciler.setActionability(f.native.repositories[0], { actionable: true, reasons: [] });
     await vi.advanceTimersByTimeAsync(1000); await f.coordinator.waitForIdle();
     expect(f.coordinator.mappingState).toBe('other-scm-providers');
-    expect(f.resetNativeVisibility).toHaveBeenCalledOnce();
-    const recovery = expect(f.coordinator.confirmSupportedForRecovery()).rejects.toThrow('Source Control providers');
-    await vi.advanceTimersByTimeAsync(1000); await recovery;
     expect(f.resetNativeVisibility).toHaveBeenCalledOnce();
   });
 

@@ -91,7 +91,6 @@ async function start(
     toggle: command => nativeVisibilityCommands.execute(command),
     resetToAllVisible: async () => {
       logger.warn('Recovering a failed native visibility application with an all-visible reset.');
-      await visibility.confirmSupportedForRecovery();
       await nativeVisibilityCommands.waitForIdle(NATIVE_VISIBILITY_COMMAND_TIMEOUT_MILLISECONDS);
       await nativeVisibilityResetter.reset();
     },
