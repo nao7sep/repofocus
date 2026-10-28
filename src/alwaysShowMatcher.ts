@@ -28,8 +28,12 @@ export class AlwaysShowTimeoutError extends Error {}
 /**
  * Minimatch can spend extreme CPU time even with short patterns. One terminable
  * worker isolates compilation and matching from VS Code's shared extension host.
- * Each open repository owns one cached result per settings generation; Git
- * events update its callback, rather than adding another queued match.
+ * Each open repository holds its one result per settings generation; Git
+ * events update its callback, rather than adding another queued match. The
+ * record is where the worker's answer lives until the repository is evaluated
+ * again, not a speed cache: without it every Git event would make a hidden
+ * repository provisionally visible, reapply native visibility twice, and spend
+ * another bounded match on a pattern already known to be pathological.
  */
 export class AlwaysShowMatcher {
   private generation = 0;

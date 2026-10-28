@@ -183,15 +183,18 @@ export class VisibilityMappingCoordinator {
     return this.options.filteringRequested() && repositories.length >= minimumRepositoryCount;
   }
 
+  private hasPendingWork(): boolean {
+    if (this.disposed) return false;
+    return this.options.reconciler.compatible ? this.refreshPending : this.recoveryRequested;
+  }
+
   private async drain(): Promise<void> {
-    while (!this.disposed) {
+    while (this.hasPendingWork()) {
       if (!this.options.reconciler.compatible) {
-        if (!this.recoveryRequested) return;
         this.recoveryRequested = false;
         await this.options.reconciler.restoreOwned();
         continue;
       }
-      if (!this.refreshPending) return;
       const settleMilliseconds = this.options.topologySettleMilliseconds ?? 1_000;
       const remaining = settleMilliseconds - (performance.now() - this.requestedAt);
       // A newer request cancels the wait and restarts it from its own time.
@@ -377,6 +380,8 @@ export class VisibilityMappingCoordinator {
     if (this.run) return;
     this.run = this.drain().finally(() => {
       this.run = undefined;
+      // A request made after the loop's last check found this run still set.
+      if (this.hasPendingWork()) this.startDrain();
     });
   }
 }

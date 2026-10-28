@@ -232,6 +232,41 @@ describe('VisibilityMappingCoordinator', () => {
     expect(coordinator.baselineEstablished).toBe(true);
   });
 
+  it.each(Array.from({ length: 12 }, (_, depth) => depth))(
+    'runs a refresh requested %i microtasks after the last run finishes',
+    async depth => {
+      const fixture = coordinatorFixture(['alpha', 'beta']);
+      let coordinator!: VisibilityMappingCoordinator;
+      let requested = false;
+      let markRequested!: () => void;
+      const lateRequest = new Promise<void>(resolve => { markRequested = resolve; });
+      coordinator = new VisibilityMappingCoordinator({
+        filteringRequested: () => true,
+        getCommands: fixture.getCommands,
+        getRepositories: () => fixture.native.repositories,
+        topologyReady: () => true,
+        resetNativeVisibility: fixture.resetNativeVisibility,
+        reconciler: fixture.reconciler,
+        topologySettleMilliseconds: 0,
+        onInitialized: () => {
+          if (requested) return;
+          requested = true;
+          // Lands as the drain leaves its loop and before it releases its run.
+          let chain = Promise.resolve();
+          for (let tick = 0; tick < depth; tick += 1) chain = chain.then(() => {});
+          void chain.then(() => { coordinator.refresh(); markRequested(); });
+        },
+      });
+
+      coordinator.refresh();
+      await lateRequest;
+      await coordinator.waitForIdle();
+
+      expect(coordinator.baselineEstablished).toBe(true);
+      expect(fixture.resetNativeVisibility).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it('coalesces refreshes requested before a mapping transaction begins', async () => {
     const fixture = coordinatorFixture(['alpha', 'beta']);
     const initialized = vi.fn();
