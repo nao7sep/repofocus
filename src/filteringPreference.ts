@@ -1,7 +1,7 @@
 export interface FilteringPreferenceOptions {
   readonly initialValue: boolean;
-  /** Applies the live preference to native visibility; the reconciler reports its own failures. */
-  readonly apply: () => PromiseLike<void>;
+  /** Requests native visibility for the live preference; the reconciler reports its own failures. */
+  readonly apply: () => void;
   readonly persist: (enabled: boolean) => PromiseLike<void>;
   readonly publishContext: (enabled: boolean) => PromiseLike<void>;
 }

@@ -3,7 +3,6 @@ import type { GitRepository } from './gitApi';
 import {
   DEFAULT_SELECTION_TIMEOUT_MILLISECONDS,
   waitForSelectedRepository,
-  VisibilityProbeInterruptedError,
   VisibilityProbeError,
 } from './visibilityBaseline';
 import type { RepositoryIdentity, VisibilityMapping } from './visibilityCommandResolver';
@@ -16,7 +15,7 @@ export interface VisibilityReconcilerOptions {
   readonly onError?: (error: Error, failure: VisibilityFailure) => void;
 }
 
-/** Native mutations run only inside the coordinator's serialized application.
+/** Native mutations, recovery included, run only inside the coordinator's drain.
  * The hide ledger describes that batch, never the user's current visibility.
  * Verified provider identities survive visibility resets; uncertain probes do not.
  */
@@ -27,7 +26,6 @@ export class VisibilityReconciler {
   private state: 'active' | 'failed' | 'disposed' = 'active';
   private filteringEnabled = false;
   private pendingToggles = 0;
-  private recovery: Promise<boolean> | undefined;
   private onDesiredChange: (() => void) | undefined;
 
   constructor(private readonly options: VisibilityReconcilerOptions) {}
@@ -35,6 +33,7 @@ export class VisibilityReconciler {
   get enabled(): boolean { return this.compatible && this.filteringEnabled; }
   get hiddenRepositoryCount(): number { return this.hiddenCommands.size; }
   get toggling(): boolean { return this.pendingToggles > 0; }
+  private get disposed(): boolean { return this.state === 'disposed'; }
 
   onDidChangeDesiredVisibility(listener: () => void): void { this.onDesiredChange = listener; }
   setActionability(repository: RepositoryIdentity, value: RepositoryActionability): void {
@@ -81,12 +80,9 @@ export class VisibilityReconciler {
   async apply(
     repositories: readonly GitRepository[],
     selected: GitRepository | undefined,
-    isCurrent: () => boolean,
+    signal: AbortSignal,
     selectionTimeoutMilliseconds = DEFAULT_SELECTION_TIMEOUT_MILLISECONDS,
   ): Promise<void> {
-    const assertCurrent = (): void => {
-      if (!isCurrent() || !this.compatible) throw new VisibilityProbeInterruptedError();
-    };
     const visible = repositories.filter(repository => !this.enabled
       || this.actionability.get(repository.rootUri.toString())?.actionable !== false);
     selected = selected && repositories.find(repository => repository.rootUri.toString() === selected!.rootUri.toString());
@@ -94,35 +90,51 @@ export class VisibilityReconciler {
       // Isolate the saved target to restore native selection without relying on
       // a command that changes a different notion of "active provider".
       const target = this.mappings.get(selected.rootUri.toString())!;
-      assertCurrent();
+      signal.throwIfAborted();
       if (this.hiddenCommands.has(target.command)) await this.reveal(target.command);
       for (const repository of repositories) {
-        assertCurrent();
+        signal.throwIfAborted();
         const mapping = this.mappings.get(repository.rootUri.toString())!;
         if (repository !== selected && !this.hiddenCommands.has(mapping.command)) await this.hide(mapping.command);
       }
-      if (!await waitForSelectedRepository([selected], selectionTimeoutMilliseconds, assertCurrent)) {
+      if (!await waitForSelectedRepository([selected], selectionTimeoutMilliseconds, signal)) {
         throw new VisibilityProbeError('Native repository selection could not be restored.');
       }
     }
     // Reveal first: restoring selection must not pass through an all-hidden set.
     for (const repository of visible) {
-      assertCurrent();
+      signal.throwIfAborted();
       const mapping = this.mappings.get(repository.rootUri.toString())!;
       if (this.hiddenCommands.has(mapping.command)) await this.reveal(mapping.command);
     }
     const desired = new Set(visible);
     for (const repository of repositories) {
-      assertCurrent();
+      signal.throwIfAborted();
       const mapping = this.mappings.get(repository.rootUri.toString())!;
       if (!desired.has(repository) && !this.hiddenCommands.has(mapping.command)) await this.hide(mapping.command);
     }
-    assertCurrent();
+    signal.throwIfAborted();
   }
 
   failAllVisibleReset(error: unknown): void { this.fail(error); }
   failCompatibility(error: unknown): void { this.fail(error); }
-  async restoreOwned(): Promise<void> { await this.resetAfterFailure(); }
+  /**
+   * Reveals every repository after a failure left native visibility unknown,
+   * never by inverting the untrusted hide ledger. A failed reset is reported,
+   * and the user's next off request retries it.
+   */
+  async restoreOwned(): Promise<void> {
+    if (this.disposed || !this.options.resetToAllVisible) return;
+    try {
+      await this.options.resetToAllVisible();
+      this.acceptAllVisible();
+    } catch (error) {
+      if (!this.disposed) this.options.onError?.(
+        new Error('Failed to establish an all-visible baseline after a native visibility failure.', { cause: error }),
+        { strandedCommandCount: this.hiddenCommands.size },
+      );
+    }
+  }
   dispose(): void { this.state = 'disposed'; this.onDesiredChange = undefined; }
 
   private fail(error: unknown): void {
@@ -138,30 +150,7 @@ export class VisibilityReconciler {
       await this.options.toggle(command);
     } catch (error) {
       this.fail(error);
-      await this.resetAfterFailure();
       throw error;
     } finally { this.pendingToggles -= 1; }
-  }
-  private resetAfterFailure(): Promise<boolean> {
-    if (this.state === 'disposed') return Promise.resolve(false);
-    this.recovery ??= this.attemptReset().then(success => {
-      if (!success) this.recovery = undefined;
-      return success;
-    });
-    return this.recovery;
-  }
-  private async attemptReset(): Promise<boolean> {
-    if (!this.options.resetToAllVisible) return false;
-    try {
-      await this.options.resetToAllVisible();
-      this.acceptAllVisible();
-      return true;
-    } catch (error) {
-      if (this.state !== 'disposed') this.options.onError?.(
-        new Error('Failed to establish an all-visible baseline after a native visibility failure.', { cause: error }),
-        { strandedCommandCount: this.hiddenCommands.size },
-      );
-      return false;
-    }
   }
 }

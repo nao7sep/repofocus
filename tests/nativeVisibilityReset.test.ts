@@ -140,7 +140,7 @@ describe('reset command settlement', () => {
     }
   });
 
-  function heldCommands(executorBound = 10, resetBound = 100) {
+  function heldCommands() {
     const changed = modeEvent();
     let mode = 'multiple';
     const gates = new Map<string, () => void>();
@@ -148,20 +148,16 @@ describe('reset command settlement', () => {
     const execute = vi.fn((command: string) => new Promise<void>(resolve => {
       gates.set(command, resolve);
     }));
-    const executor = new NativeVisibilityCommandExecutor({
-      execute,
-      timeoutMilliseconds: executorBound,
-    });
+    const executor = new NativeVisibilityCommandExecutor({ execute });
     const onForeignDeparture = vi.fn();
     const onForeignReset = vi.fn();
     const resetter = new NativeVisibilityResetter({
       executeCommand: command => executor.execute(command),
-      waitForCommandSettlement: (milliseconds, signal) => executor.waitForIdle(milliseconds, signal),
       getSelectionMode: () => mode,
       onDidChangeSelectionMode: changed.event,
       onForeignDeparture,
       onForeignReset,
-      timeoutMilliseconds: resetBound,
+      timeoutMilliseconds: 100,
     });
     cleanup.push(async () => {
       resetter.dispose();
@@ -227,55 +223,33 @@ describe('reset command settlement', () => {
     expect(done).toBe(true);
   });
 
-  it.each(['event-first', 'settlement-first'] as const)(
-    'finishes a late single result inside the existing reset budget (%s)',
-    async order => {
-      const fixture = heldCommands();
-      const reset = fixture.begin();
-      await vi.advanceTimersByTimeAsync(10);
-      expect(fixture.resetter.reset()).toBe(reset);
-      expect(fixture.execute).toHaveBeenCalledTimes(1);
-
-      if (order === 'event-first') fixture.observe('single');
-      fixture.settle(selectionModeCommands.single);
-      await vi.advanceTimersByTimeAsync(0);
-      if (order === 'settlement-first') {
-        expect(fixture.execute).toHaveBeenCalledTimes(1);
-        fixture.observe('single');
-        await vi.advanceTimersByTimeAsync(0);
-      }
-      fixture.observe('multiple');
-      fixture.settle(selectionModeCommands.multiple);
-      await reset;
-      expect(fixture.execute).toHaveBeenCalledTimes(2);
-      expect(fixture.onForeignDeparture).not.toHaveBeenCalled();
-      expect(fixture.onForeignReset).not.toHaveBeenCalled();
-    },
-  );
-
-  it('expires at the total reset deadline without certifying a later result', async () => {
+  it('waits for its native command beyond the reset bound, which only observes settings', async () => {
     const fixture = heldCommands();
     const reset = fixture.begin();
-    const result = expect(reset).rejects.toThrow('did not settle repository selection mode "single"');
-    await vi.advanceTimersByTimeAsync(100);
-    await result;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fixture.execute).toHaveBeenCalledTimes(1);
+
     fixture.observe('single');
     fixture.settle(selectionModeCommands.single);
     await vi.advanceTimersByTimeAsync(0);
-    expect(fixture.execute).toHaveBeenCalledTimes(1);
-    expect(fixture.onForeignDeparture).toHaveBeenCalledOnce();
-    expect(fixture.changed.listenerCount()).toBe(1);
+    fixture.observe('multiple');
+    fixture.settle(selectionModeCommands.multiple);
+    await reset;
+    expect(fixture.execute).toHaveBeenCalledTimes(2);
+    expect(fixture.onForeignDeparture).not.toHaveBeenCalled();
+    expect(fixture.onForeignReset).not.toHaveBeenCalled();
   });
 
-  it('disposal ends a pending late-result wait and prevents a follow-up command', async () => {
+  it('disposal ends a pending mode wait and prevents a follow-up command', async () => {
     const fixture = heldCommands();
     const reset = fixture.begin();
-    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(0);
+    fixture.settle(selectionModeCommands.single);
+    await vi.advanceTimersByTimeAsync(0);
     fixture.resetter.dispose();
     await expect(reset).rejects.toThrow('disposed');
     expect(vi.getTimerCount()).toBe(0);
     fixture.observe('single');
-    fixture.settle(selectionModeCommands.single);
     await vi.advanceTimersByTimeAsync(0);
     expect(fixture.execute).toHaveBeenCalledTimes(1);
     expect(fixture.changed.listenerCount()).toBe(0);

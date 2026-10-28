@@ -1,7 +1,6 @@
 import type { GitRepository } from './gitApi';
 import {
   mapVisibilityCommandsInOrder,
-  VisibilityProbeInterruptedError,
   type VisibilityProbeTimings,
 } from './visibilityBaseline';
 import {
@@ -13,7 +12,6 @@ import type { VisibilityReconciler } from './visibilityReconciler';
 
 export interface VisibilityInitialization {
   readonly repositoryCount: number;
-  readonly revision: number;
 }
 
 export type VisibilityUnavailableReason =
@@ -45,30 +43,42 @@ function delay(milliseconds: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, milliseconds));
 }
 
-/** A settle wait that ends early, without error, when it is cancelled. */
+/** A settle wait that resolves true when it elapses and false when it is cancelled. */
 class SettleWait {
   private timer: ReturnType<typeof setTimeout> | undefined;
-  private finish: (() => void) | undefined;
+  private finish: ((elapsed: boolean) => void) | undefined;
 
-  wait(milliseconds: number): Promise<void> {
+  wait(milliseconds: number): Promise<boolean> {
     this.cancel();
     return new Promise(resolve => {
       this.finish = resolve;
-      this.timer = setTimeout(() => this.cancel(), milliseconds);
+      this.timer = setTimeout(() => this.end(true), milliseconds);
     });
   }
 
   cancel(): void {
+    this.end(false);
+  }
+
+  private end(elapsed: boolean): void {
     if (this.timer !== undefined) clearTimeout(this.timer);
     const finish = this.finish;
     this.timer = undefined;
     this.finish = undefined;
-    finish?.();
+    finish?.(elapsed);
   }
 }
 
+/**
+ * The single owner of native visibility. Refresh and recovery requests are
+ * applied by one drain, one run at a time; a newer refresh aborts the running
+ * run, which stops before its next native command, and the drain coalesces the
+ * requests that arrived meanwhile into one run.
+ */
 export class VisibilityMappingCoordinator {
-  private revision = 0;
+  private refreshPending = false;
+  private recoveryRequested = false;
+  private runAbort: AbortController | undefined;
   private requestedAt = 0;
   private run: Promise<void> | undefined;
   private disposed = false;
@@ -108,7 +118,8 @@ export class VisibilityMappingCoordinator {
       clearTimeout(this.commandRegistrationRetry);
       this.commandRegistrationRetry = undefined;
     }
-    this.revision += 1;
+    this.refreshPending = true;
+    this.runAbort?.abort();
     this.requestedAt = settleTopology ? performance.now() : -Infinity;
     if (!this.selectionCaptured) {
       this.savedSelection = this.options.getRepositories().find(repository => repository.ui.selected);
@@ -141,14 +152,18 @@ export class VisibilityMappingCoordinator {
     this.requestRefresh(false);
   }
 
-  /** Invalidate discovery immediately; the drain still owns issued commands. */
-  async updateFiltering(): Promise<void> {
-    if (!this.options.reconciler.compatible) {
-      if (!this.shouldFilter()) await this.options.reconciler.restoreOwned();
-      return;
+  /**
+   * Aborts discovery at once; the drain still lets an issued command finish.
+   * After a failure, turning filtering off asks the drain to retry the
+   * all-visible reset.
+   */
+  updateFiltering(): void {
+    if (this.options.reconciler.compatible) {
+      this.requestRefresh(false);
+    } else if (!this.disposed && !this.shouldFilter()) {
+      this.recoveryRequested = true;
+      this.startDrain();
     }
-    this.requestRefresh(false);
-    // Preference publication must not wait for a held command or probe.
   }
 
   async waitForIdle(): Promise<void> {
@@ -158,7 +173,7 @@ export class VisibilityMappingCoordinator {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    this.revision += 1;
+    this.runAbort?.abort();
     this.settle.cancel();
     if (this.commandRegistrationRetry) clearTimeout(this.commandRegistrationRetry);
     this.commandRegistrationRetry = undefined;
@@ -169,15 +184,22 @@ export class VisibilityMappingCoordinator {
   }
 
   private async drain(): Promise<void> {
-    while (!this.disposed && this.options.reconciler.compatible) {
-      const revision = this.revision;
+    while (!this.disposed) {
+      if (!this.options.reconciler.compatible) {
+        if (!this.recoveryRequested) return;
+        this.recoveryRequested = false;
+        await this.options.reconciler.restoreOwned();
+        continue;
+      }
+      if (!this.refreshPending) return;
       const settleMilliseconds = this.options.topologySettleMilliseconds ?? 1_000;
       const remaining = settleMilliseconds - (performance.now() - this.requestedAt);
-      if (remaining > 0) await this.settle.wait(remaining);
-      if (this.disposed || !this.options.reconciler.compatible) return;
-      if (revision !== this.revision) continue;
-      await this.refreshOnce(revision);
-      if (revision === this.revision) return;
+      // A newer request cancels the wait and restarts it from its own time.
+      if (remaining > 0 && !await this.settle.wait(remaining)) continue;
+      this.refreshPending = false;
+      const run = new AbortController();
+      this.runAbort = run;
+      await this.refreshOnce(run.signal);
     }
   }
 
@@ -188,8 +210,8 @@ export class VisibilityMappingCoordinator {
     this.options.onUnavailable?.(reason);
   }
 
-  private async standDown(reason: VisibilityUnavailableReason, revision: number): Promise<void> {
-    if (revision !== this.revision || this.disposed) return;
+  private standDown(reason: VisibilityUnavailableReason, signal: AbortSignal): void {
+    if (signal.aborted) return;
     this.selectionCaptured = false;
     this.savedSelection = undefined;
     this.reportUnavailable(reason);
@@ -209,9 +231,7 @@ export class VisibilityMappingCoordinator {
     }, milliseconds);
   }
 
-  private async refreshOnce(revision: number): Promise<void> {
-    const current = (): boolean => revision === this.revision && !this.disposed;
-    if (!current()) return;
+  private async refreshOnce(signal: AbortSignal): Promise<void> {
     const repositories = [...this.options.getRepositories()];
     const filtering = this.shouldFilter(repositories);
     this.options.reconciler.setFilteringEnabled(false);
@@ -223,33 +243,33 @@ export class VisibilityMappingCoordinator {
       return;
     }
     if (!this.options.topologyReady()) {
-      await this.standDown('loading-repositories', revision);
+      this.standDown('loading-repositories', signal);
       return;
     }
     let commands: readonly string[] | undefined;
     try {
-      commands = await this.resolveSettledCommands(repositories.length, revision);
+      commands = await this.resolveSettledCommands(repositories.length, signal);
     } catch (error) {
       if (error instanceof OtherScmProvidersError) {
-        await this.standDown('other-scm-providers', revision);
-      } else if (current()) this.options.reconciler.failCompatibility(error);
+        this.standDown('other-scm-providers', signal);
+      } else if (!signal.aborted) this.options.reconciler.failCompatibility(error);
       return;
     }
-    if (!current()) return;
+    if (signal.aborted) return;
     if (!commands) {
-      await this.standDown('awaiting-native-commands', revision);
+      this.standDown('awaiting-native-commands', signal);
       return;
     }
     try {
       if (!this.nativeAllVisible && !await this.resetBaseline()) return;
-      if (!current()) return;
+      if (signal.aborted) return;
       this.nativeAllVisible = false;
       this.options.reconciler.acceptAllVisible();
       if (!filtering) {
         // Off needs no identity discovery. Retained identities can restore a
         // selection that the reset moved without probing new providers.
         if (this.options.reconciler.hasMappings(repositories, commands)) {
-          await this.options.reconciler.apply(repositories, this.savedSelection, current,
+          await this.options.reconciler.apply(repositories, this.savedSelection, signal,
             this.options.probeTimings?.selectionTimeoutMilliseconds);
         }
         this.selectionCaptured = false;
@@ -257,29 +277,30 @@ export class VisibilityMappingCoordinator {
         return;
       }
       if (!this.options.reconciler.hasMappings(repositories, commands)) {
-        const mappings = await mapVisibilityCommandsInOrder(repositories, commands, this.options.reconciler, {
-          ...this.options.probeTimings, isCurrent: current,
-        });
-        if (!current()) return;
+        const mappings = await mapVisibilityCommandsInOrder(
+          repositories, commands, this.options.reconciler, this.options.probeTimings, signal,
+        );
+        if (signal.aborted) return;
         this.options.reconciler.setMappings(mappings);
       }
       this.options.reconciler.setFilteringEnabled(true);
-      await this.options.reconciler.apply(repositories, this.savedSelection, current,
+      await this.options.reconciler.apply(repositories, this.savedSelection, signal,
         this.options.probeTimings?.selectionTimeoutMilliseconds);
-      if (!current()) return;
       this.selectionCaptured = false;
       this.savedSelection = undefined;
       this.hasBaseline = true;
       this.unavailableReason = undefined;
       this.reportedReason = undefined;
-      this.options.onInitialized?.({ repositoryCount: repositories.length, revision });
+      this.options.onInitialized?.({ repositoryCount: repositories.length });
     } catch (error) {
       this.hasBaseline = false;
-      if (!current() || error instanceof VisibilityProbeInterruptedError) return;
-      if (!this.options.reconciler.compatible) return;
-      // A failed focus probe left a partial set. Recovery rechecks the supported
-      // provider boundary before performing its all-visible reset.
-      this.options.reconciler.failCompatibility(error);
+      if (this.disposed) return;
+      if (this.options.reconciler.compatible) {
+        if (signal.aborted) return;
+        this.options.reconciler.failCompatibility(error);
+      }
+      // A failed toggle or focus probe left native visibility unknown; an
+      // all-visible reset, never an inverted ledger, makes it known again.
       await this.options.reconciler.restoreOwned();
     }
   }
@@ -302,7 +323,7 @@ export class VisibilityMappingCoordinator {
 
   private async resolveSettledCommands(
     repositoryCount: number,
-    revision: number,
+    signal: AbortSignal,
   ): Promise<readonly string[] | undefined> {
     const attempts = this.unavailableReason === 'awaiting-native-commands'
       ? 1
@@ -317,13 +338,13 @@ export class VisibilityMappingCoordinator {
     let lastError: unknown;
     let registrationPending = false;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
-      if (revision !== this.revision || this.disposed) return undefined;
+      if (signal.aborted) return undefined;
       if (deadline - performance.now() < 1) break;
       try {
         // Each read runs inside this drain turn, so reads never overlap and a
         // superseded run discards its own result below.
         const registeredCommands = await this.options.getCommands();
-        if (revision !== this.revision || this.disposed) return undefined;
+        if (signal.aborted) return undefined;
         const discovery = discoverVisibilityCommands(
           repositoryCount,
           registeredCommands,

@@ -3,7 +3,6 @@ import type { GitRepository } from '../src/gitApi';
 import {
   mapVisibilityCommandsInOrder,
   VisibilityProbeError,
-  VisibilityProbeInterruptedError,
   type VisibilityProbeLedger,
 } from '../src/visibilityBaseline';
 
@@ -189,13 +188,13 @@ describe('mapVisibilityCommandsInOrder', () => {
     expect(ledger.hide).toHaveBeenCalledTimes(2);
   });
 
-  it('interrupts immediately after a stale hide so recovery retains ownership', async () => {
+  it('stops immediately after a hide once its run is aborted', async () => {
     const world = nativeWorld(['alpha', 'beta']);
-    let current = true;
+    const run = new AbortController();
     const ledger: VisibilityProbeLedger = {
       hide: async command => {
         await world.ledger.hide(command);
-        current = false;
+        run.abort();
       },
       reveal: command => world.ledger.reveal(command),
     };
@@ -204,8 +203,9 @@ describe('mapVisibilityCommandsInOrder', () => {
       world.repositories,
       world.commands,
       ledger,
-      { ...fastTimings, isCurrent: () => current },
-    )).rejects.toBeInstanceOf(VisibilityProbeInterruptedError);
+      fastTimings,
+      run.signal,
+    )).rejects.toMatchObject({ name: 'AbortError' });
     expect(world.executed).toEqual(['hide:toggle.scm0']);
   });
 });

@@ -8,10 +8,7 @@ import { FilteringPreference, readStoredFilteringEnabled } from './filteringPref
 import type { GitApi, GitExtension, GitRepository } from './gitApi';
 import { GitRepositoryMonitor } from './gitRepositoryMonitor';
 import { Logger } from './logger';
-import {
-  NativeVisibilityCommandExecutor,
-  NATIVE_VISIBILITY_COMMAND_TIMEOUT_MILLISECONDS,
-} from './nativeVisibilityCommandExecutor';
+import { NativeVisibilityCommandExecutor } from './nativeVisibilityCommandExecutor';
 import { NativeVisibilityResetter } from './nativeVisibilityReset';
 import { toActionabilityInput } from './repositoryStateAdapter';
 import { describeFailure, describeMappingState, describeUnsavedFiltering } from './userMessages';
@@ -82,7 +79,6 @@ async function start(
     toggle: command => nativeVisibilityCommands.execute(command),
     resetToAllVisible: async () => {
       logger.warn('Recovering a failed native visibility application with an all-visible reset.');
-      await nativeVisibilityCommands.waitForIdle(NATIVE_VISIBILITY_COMMAND_TIMEOUT_MILLISECONDS);
       await nativeVisibilityResetter.reset();
     },
     onError: (error, failure) => {
@@ -156,7 +152,6 @@ async function start(
         actionableRepositoryCount: [...actionability.values()]
           .filter(value => value.actionable).length,
         hiddenRepositoryCount: reconciler.hiddenRepositoryCount,
-        revision: event.revision,
       });
     },
   });
@@ -164,7 +159,6 @@ async function start(
 
   const nativeVisibilityResetter = new NativeVisibilityResetter({
     executeCommand: command => nativeVisibilityCommands.execute(command),
-    waitForCommandSettlement: (milliseconds, signal) => nativeVisibilityCommands.waitForIdle(milliseconds, signal),
     getSelectionMode: () => vscode.workspace.getConfiguration('scm')
       .get<string>('repositories.selectionMode', 'multiple'),
     onDidChangeSelectionMode: listener => vscode.workspace.onDidChangeConfiguration(event => {

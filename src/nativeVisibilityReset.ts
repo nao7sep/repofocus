@@ -1,5 +1,4 @@
 import type { DisposableLike, EventLike } from './gitApi';
-import { NativeVisibilityCommandTimeoutError } from './nativeVisibilityCommandExecutor';
 import { selectionModeCommands } from './visibilityCommandResolver';
 
 export type RepositorySelectionMode = 'multiple' | 'single';
@@ -10,9 +9,12 @@ export interface NativeVisibilityResetOptions {
   readonly executeCommand: (command: string) => Promise<void>;
   readonly getSelectionMode: () => string;
   readonly onDidChangeSelectionMode: EventLike<void>;
-  /** Joins the existing executor's raw command after its shorter caller timeout. */
-  readonly waitForCommandSettlement?: (timeoutMilliseconds: number, signal?: AbortSignal) => Promise<void>;
   readonly signal?: AbortSignal;
+  /**
+   * Bounds the wait for VS Code to report each requested mode, across both
+   * transitions. A command's reply does not confirm the setting, so this
+   * observes host state; the commands themselves run to their end.
+   */
   readonly timeoutMilliseconds?: number;
 }
 
@@ -106,53 +108,27 @@ async function setSelectionMode(
   deadline: number,
 ): Promise<void> {
   if (options.signal?.aborted) throw disposedError();
+  // VS Code writes this mode to the user settings, or to a workspace's
+  // settings file when that workspace sets scm.repositories.selectionMode
+  // itself. The developer accepted that write: VS Code offers no
+  // setting-free way to reach a known all-visible state.
+  await options.executeCommand(selectionModeCommands[mode]);
+  if (options.signal?.aborted) throw disposedError();
+  if (options.getSelectionMode() === mode) return;
+
   const timeoutMilliseconds = remainingTime(deadline);
   if (timeoutMilliseconds === 0) throw modeTimeout(mode, timeoutMilliseconds);
   let subscription: DisposableLike | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let abort: (() => void) | undefined;
-
   try {
     await new Promise<void>((resolve, reject) => {
-      let settled = false;
-      let commandComplete = false;
-      const finish = (error?: unknown): void => {
-        if (settled) return;
-        settled = true;
-        if (timer !== undefined) clearTimeout(timer);
-        subscription?.dispose();
-        if (error === undefined) resolve();
-        else reject(error);
-      };
-      const check = (): void => {
-        if (!settled && commandComplete && options.getSelectionMode() === mode) finish();
-      };
-
-      subscription = options.onDidChangeSelectionMode(check);
-      abort = () => finish(disposedError());
-      options.signal?.addEventListener('abort', abort, { once: true });
-      timer = setTimeout(() => finish(modeTimeout(mode, timeoutMilliseconds)), timeoutMilliseconds);
-      // VS Code writes this mode to the user settings, or to a workspace's
-      // settings file when that workspace sets scm.repositories.selectionMode
-      // itself. The developer accepted that write: VS Code offers no
-      // setting-free way to reach a known all-visible state.
-      const completed = (): void => {
-        commandComplete = true;
-        check();
-      };
-      options.executeCommand(selectionModeCommands[mode]).then(completed, error => {
-        if (settled) return;
-        // The command slot survives the executor's shorter deadline. Keep this
-        // reset pending inside its own budget until that slot and the effective
-        // mode settle; an RPC reply alone says nothing about settings durability.
-        const wait = options.waitForCommandSettlement;
-        const remaining = remainingTime(deadline);
-        if (error instanceof NativeVisibilityCommandTimeoutError && wait && remaining > 0) {
-          wait(remaining, options.signal).then(completed, finish);
-        } else {
-          finish(error);
-        }
+      subscription = options.onDidChangeSelectionMode(() => {
+        if (options.getSelectionMode() === mode) resolve();
       });
+      abort = () => reject(disposedError());
+      options.signal?.addEventListener('abort', abort, { once: true });
+      timer = setTimeout(() => reject(modeTimeout(mode, timeoutMilliseconds)), timeoutMilliseconds);
     });
   } finally {
     if (timer !== undefined) clearTimeout(timer);

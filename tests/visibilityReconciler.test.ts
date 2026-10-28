@@ -24,18 +24,18 @@ describe('VisibilityReconciler batch application', () => {
   it('hides every clean repository, including the last one', async () => {
     const f = fixture(); f.reconciler.setFilteringEnabled(true);
     f.repositories.forEach(r => f.reconciler.setActionability(r, { actionable: false, reasons: [] }));
-    await f.reconciler.apply(f.repositories, undefined, () => true);
+    await f.reconciler.apply(f.repositories, undefined, new AbortController().signal);
     expect(f.visible.size).toBe(0); expect(f.reconciler.hiddenRepositoryCount).toBe(2);
   });
   it('restores eligible selection from the probe state before showing the rest', async () => {
     const f = fixture(); await f.reconciler.hide('b');
-    await f.reconciler.apply(f.repositories, f.repositories[1], () => true);
+    await f.reconciler.apply(f.repositories, f.repositories[1], new AbortController().signal);
     expect(f.visible).toEqual(new Set(['a', 'b'])); expect(f.selected()).toBe('b');
   });
   it('does not restore a filtered selection', async () => {
     const f = fixture(); f.reconciler.setFilteringEnabled(true);
     f.reconciler.setActionability(f.repositories[1], { actionable: false, reasons: [] });
-    await f.reconciler.apply(f.repositories, f.repositories[1], () => true);
+    await f.reconciler.apply(f.repositories, f.repositories[1], new AbortController().signal);
     expect(f.visible).toEqual(new Set(['a'])); expect(f.selected()).toBe('a');
   });
   it('notifies only a changed desired visibility, without issuing commands', () => {
@@ -57,10 +57,12 @@ describe('VisibilityReconciler batch application', () => {
     expect(f.reconciler.hasMappings([{ ...f.repositories[0] }, f.repositories[1]], ['a', 'b'])).toBe(false);
     expect(f.reconciler.hasMappings(f.repositories, ['retired', 'b'])).toBe(false);
   });
-  it('stops an obsolete application before its next mutation', async () => {
+  it('stops an aborted application before its next mutation', async () => {
     const f = fixture(); f.reconciler.setFilteringEnabled(true);
     f.repositories.forEach(r => f.reconciler.setActionability(r, { actionable: false, reasons: [] }));
-    await expect(f.reconciler.apply(f.repositories, undefined, () => f.toggle.mock.calls.length === 0)).rejects.toThrow('changed');
+    const run = new AbortController(); const toggle = f.toggle.getMockImplementation()!;
+    f.toggle.mockImplementation(async name => { await toggle(name); run.abort(); });
+    await expect(f.reconciler.apply(f.repositories, undefined, run.signal)).rejects.toMatchObject({ name: 'AbortError' });
     expect(f.toggle).toHaveBeenCalledOnce();
   });
   it.each([false, true])('recovers ambiguous toggles by reset, never inversion (effect: %s)', async effect => {
@@ -73,8 +75,11 @@ describe('VisibilityReconciler batch application', () => {
   });
   it('allows explicit retry after recovery failure, but never acts on dispose', async () => {
     const reset = vi.fn().mockRejectedValueOnce(new Error('reset failed')).mockResolvedValue(undefined);
-    const reconciler = new VisibilityReconciler({ toggle: async () => { throw new Error('failed'); }, resetToAllVisible: reset });
-    await expect(reconciler.hide('a')).rejects.toThrow(); await reconciler.restoreOwned();
-    expect(reset).toHaveBeenCalledTimes(2); reconciler.dispose(); await reconciler.restoreOwned(); expect(reset).toHaveBeenCalledTimes(2);
+    const onError = vi.fn();
+    const reconciler = new VisibilityReconciler({ toggle: async () => { throw new Error('failed'); }, resetToAllVisible: reset, onError });
+    await expect(reconciler.hide('a')).rejects.toThrow(); expect(reset).not.toHaveBeenCalled();
+    await reconciler.restoreOwned(); expect(onError).toHaveBeenCalledTimes(2);
+    await reconciler.restoreOwned(); expect(reset).toHaveBeenCalledTimes(2); expect(onError).toHaveBeenCalledTimes(2);
+    reconciler.dispose(); await reconciler.restoreOwned(); expect(reset).toHaveBeenCalledTimes(2);
   });
 });

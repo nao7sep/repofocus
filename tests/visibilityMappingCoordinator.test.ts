@@ -276,19 +276,19 @@ describe('VisibilityMappingCoordinator', () => {
     await coordinator.waitForIdle();
 
     filteringRequested = false;
-    await coordinator.updateFiltering();
+    coordinator.updateFiltering();
     await coordinator.waitForIdle();
     expect(native.visible.size).toBe(2);
 
     filteringRequested = true;
-    await coordinator.updateFiltering();
+    coordinator.updateFiltering();
     await coordinator.waitForIdle();
     expect(native.visible.size).toBe(0);
     expect(getCommands).toHaveBeenCalledTimes(3);
     expect(resetNativeVisibility).toHaveBeenCalledTimes(3);
   });
 
-  it('returns from updateFiltering at once while a mapping probe is still in flight', async () => {
+  it('turns off during command enumeration without touching native visibility', async () => {
     const native = nativeRepositories(['alpha', 'beta']);
     let resolveCommands!: (commands: readonly string[]) => void;
     let markStarted!: () => void;
@@ -318,11 +318,7 @@ describe('VisibilityMappingCoordinator', () => {
     expect(coordinator.baselineEstablished).toBe(false);
 
     filteringRequested = false;
-    let settled = false;
-    void coordinator.updateFiltering().then(() => { settled = true; });
-    // Drains pending promise callbacks without moving the pinned clock.
-    await vi.advanceTimersByTimeAsync(0);
-    expect(settled).toBe(true);
+    coordinator.updateFiltering();
     expect(coordinator.baselineEstablished).toBe(false);
 
     resolveCommands(native.discoveryCommands);
@@ -588,13 +584,12 @@ describe('VisibilityMappingCoordinator', () => {
     expect(resetToAllVisible).not.toHaveBeenCalled();
 
     filteringRequested = false;
-    await coordinator.updateFiltering();
+    coordinator.updateFiltering();
+    await coordinator.waitForIdle();
     expect(resetToAllVisible).toHaveBeenCalledOnce();
     expect(native.visible).toEqual(new Set(['alpha', 'beta']));
     expect(execute).not.toHaveBeenCalled();
     expect(reconciler.hiddenRepositoryCount).toBe(0);
-    await coordinator.updateFiltering();
-    expect(resetToAllVisible).toHaveBeenCalledOnce();
     coordinator.dispose();
     reconciler.dispose();
   });
@@ -815,7 +810,7 @@ describe('VisibilityMappingCoordinator', () => {
       getCommands: async () => native.discoveryCommands, getRepositories: () => native.repositories,
       topologyReady: () => true, resetNativeVisibility: reset, reconciler, topologySettleMilliseconds: 0 });
     coordinator.requestRefresh(); await vi.advanceTimersByTimeAsync(0);
-    expect(toggle).toHaveBeenCalledOnce(); enabled = false; await coordinator.updateFiltering();
+    expect(toggle).toHaveBeenCalledOnce(); enabled = false; coordinator.updateFiltering();
     expect(reset).toHaveBeenCalledOnce(); release(); await coordinator.waitForIdle();
     expect(toggle).toHaveBeenCalledOnce(); expect(reset).toHaveBeenCalledTimes(2);
     expect(native.visible.size).toBe(2); expect(coordinator.baselineEstablished).toBe(false);
@@ -854,11 +849,11 @@ describe('VisibilityMappingCoordinator', () => {
       getCommands: async () => native.discoveryCommands, getRepositories: () => native.repositories,
       topologyReady: () => true, resetNativeVisibility: reset, reconciler, topologySettleMilliseconds: 0 });
     coordinator.requestRefresh(); await started;
-    const calls = toggle.mock.calls.length; enabled = false; await coordinator.updateFiltering(); release();
+    const calls = toggle.mock.calls.length; enabled = false; coordinator.updateFiltering(); release();
     await vi.advanceTimersByTimeAsync(10); await coordinator.waitForIdle();
     expect(toggle).toHaveBeenCalledTimes(calls + (boundary === 'apply' ? 2 : 0));
     expect(native.visible.size).toBe(2);
-    enabled = true; await coordinator.updateFiltering(); await coordinator.waitForIdle();
+    enabled = true; coordinator.updateFiltering(); await coordinator.waitForIdle();
     expect(native.visible.size).toBe(0); expect(coordinator.baselineEstablished).toBe(true);
   });
 
