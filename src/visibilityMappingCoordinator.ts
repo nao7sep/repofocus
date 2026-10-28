@@ -10,10 +10,6 @@ import {
   VisibilityCompatibilityError,
 } from './visibilityCommandResolver';
 import type { VisibilityReconciler } from './visibilityReconciler';
-import {
-  HostOperationTimeoutError,
-  NonOverlappingHostOperation,
-} from './hostOperation';
 
 export interface VisibilityInitialization {
   readonly repositoryCount: number;
@@ -89,7 +85,6 @@ export class VisibilityMappingCoordinator {
   private unavailableReason: VisibilityUnavailableReason | undefined;
   private reportedReason: VisibilityUnavailableReason | undefined;
   private commandRegistrationRetry: ReturnType<typeof setTimeout> | undefined;
-  private readonly commandEnumeration = new NonOverlappingHostOperation<readonly string[]>();
 
   constructor(private readonly options: VisibilityMappingCoordinatorOptions) {
     options.reconciler.onDidChangeDesiredVisibility(() => {
@@ -235,9 +230,7 @@ export class VisibilityMappingCoordinator {
     try {
       commands = await this.resolveSettledCommands(repositories.length, revision);
     } catch (error) {
-      if (error instanceof HostOperationTimeoutError) {
-        await this.standDown('awaiting-native-commands', revision);
-      } else if (error instanceof OtherScmProvidersError) {
+      if (error instanceof OtherScmProvidersError) {
         await this.standDown('other-scm-providers', revision);
       } else if (current()) this.options.reconciler.failCompatibility(error);
       return;
@@ -325,15 +318,11 @@ export class VisibilityMappingCoordinator {
     let registrationPending = false;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       if (revision !== this.revision || this.disposed) return undefined;
-      const remaining = deadline - performance.now();
-      if (remaining < 1) break;
+      if (deadline - performance.now() < 1) break;
       try {
-        const registeredCommands = await this.commandEnumeration.wait(
-          this.options.getCommands,
-          Math.ceil(remaining),
-          'VS Code command enumeration',
-          revision,
-        );
+        // Each read runs inside this drain turn, so reads never overlap and a
+        // superseded run discards its own result below.
+        const registeredCommands = await this.options.getCommands();
         if (revision !== this.revision || this.disposed) return undefined;
         const discovery = discoverVisibilityCommands(
           repositoryCount,
@@ -349,7 +338,6 @@ export class VisibilityMappingCoordinator {
         }
         throw new OtherScmProvidersError(discovery.commandCount, repositoryCount);
       } catch (error) {
-        if (error instanceof HostOperationTimeoutError) throw error;
         lastError = error;
         if (attempt + 1 < attempts) {
           const retryRemaining = deadline - performance.now();

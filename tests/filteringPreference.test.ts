@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 import { FilteringPreference, readStoredFilteringEnabled } from '../src/filteringPreference';
-import { HostOperationTimeoutError } from '../src/hostOperation';
 
 describe('readStoredFilteringEnabled', () => {
   it.each([true, false])('keeps a stored boolean %s', stored => {
@@ -25,7 +24,6 @@ function preference(overrides: Partial<ConstructorParameters<typeof FilteringPre
     apply: async () => {},
     persist: async () => {},
     publishContext: async () => {},
-    hostWriteTimeoutMilliseconds: 1_000,
     ...overrides,
   });
 }
@@ -85,36 +83,6 @@ describe('FilteringPreference', () => {
     const results = await Promise.all([state.toggle(), state.toggle(), state.toggle()]);
     expect(results.map(result => result.enabled)).toEqual([false, true, false]);
     expect(state.current).toBe(false);
-  });
-
-  it('reports a save that outlives its wait and lets the next toggle proceed', async () => {
-    vi.useFakeTimers();
-    try {
-      const firstWrite = deferred();
-      const writes: boolean[] = [];
-      const persist = vi.fn((value: boolean) => {
-        writes.push(value);
-        return writes.length === 1 ? firstWrite.promise : Promise.resolve();
-      });
-      const state = preference({ persist });
-
-      const first = state.toggle();
-      await vi.advanceTimersByTimeAsync(1_000);
-      const firstResult = await first;
-      expect(firstResult.enabled).toBe(false);
-      expect(firstResult.saveError).toBeInstanceOf(HostOperationTimeoutError);
-
-      // The next toggle is not blocked, but its write waits for the slow one.
-      const second = state.toggle();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(writes).toEqual([false]);
-
-      firstWrite.resolve();
-      await expect(second).resolves.toEqual({ enabled: true });
-      expect(writes).toEqual([false, true]);
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it('never lets a late write land after a newer preference', async () => {

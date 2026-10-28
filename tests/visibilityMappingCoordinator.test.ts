@@ -79,10 +79,7 @@ function coordinatorFixture(names: readonly string[]) {
     topologyReady: () => true,
     resetNativeVisibility,
     reconciler,
-    probeTimings: {
-      selectionTimeoutMilliseconds: 20,
-      totalTimeoutMilliseconds: 1_000,
-    },
+    probeTimings: { selectionTimeoutMilliseconds: 20 },
     commandRetryMilliseconds: 0,
     topologySettleMilliseconds: 0,
   });
@@ -196,45 +193,6 @@ describe('VisibilityMappingCoordinator', () => {
     coordinator.refresh();
     await coordinator.waitForIdle();
     expect(getCommands).toHaveBeenCalledTimes(5);
-  });
-
-  it('recovers after a command-enumeration timeout without overlapping the stalled host call', async () => {
-    const native = nativeRepositories(['alpha', 'beta']);
-    let resolveCommands!: (commands: readonly string[]) => void;
-    const gate = new Promise<readonly string[]>(resolve => { resolveCommands = resolve; });
-    const getCommands = vi.fn(() => gate);
-    const onError = vi.fn();
-    const reconciler = new VisibilityReconciler({ toggle: native.execute, onError });
-    const coordinator = new VisibilityMappingCoordinator({
-      filteringRequested: () => true,
-      getCommands,
-      getRepositories: () => native.repositories,
-      topologyReady: () => true,
-      resetNativeVisibility: native.reset,
-      reconciler,
-      commandRetryTimeoutMilliseconds: 10,
-      commandUnavailableRetryMilliseconds: 1,
-      topologySettleMilliseconds: 0,
-    });
-
-    coordinator.requestRefresh();
-    await vi.advanceTimersByTimeAsync(10);
-    await coordinator.waitForIdle();
-
-    expect(getCommands).toHaveBeenCalledOnce();
-    expect(coordinator.mappingState).toBe('awaiting-native-commands');
-    expect(reconciler.compatible).toBe(true);
-    expect(onError).not.toHaveBeenCalled();
-
-    // Let the scheduled retry attach to the still-running operation, then
-    // settle that original call. The new revision then reads a fresh snapshot.
-    await vi.advanceTimersByTimeAsync(1);
-    resolveCommands(native.discoveryCommands);
-    await coordinator.waitForIdle();
-
-    expect(coordinator.baselineEstablished).toBe(true);
-    expect(getCommands).toHaveBeenCalledTimes(2);
-    expect(onError).not.toHaveBeenCalled();
   });
 
   it('discards command enumeration that settles after its topology revision becomes stale', async () => {
@@ -759,7 +717,7 @@ describe('VisibilityMappingCoordinator', () => {
       topologyReady: () => true,
       resetNativeVisibility,
       reconciler,
-      probeTimings: { selectionTimeoutMilliseconds: 20, totalTimeoutMilliseconds: 1_000 },
+      probeTimings: { selectionTimeoutMilliseconds: 20 },
       commandRetryMilliseconds: 0,
       topologySettleMilliseconds: 0,
     });
@@ -824,7 +782,7 @@ describe('VisibilityMappingCoordinator', () => {
     expect(f.execute).toHaveBeenCalledTimes(2); expect(f.resetNativeVisibility).toHaveBeenCalledTimes(resets);
   });
 
-  it('never consumes a timed-out command snapshot after equal-count provider replacement', async () => {
+  it('never consumes a superseded command snapshot after equal-count provider replacement', async () => {
     const old = nativeRepositories(['old', 'beta']);
     const next = nativeRepositories(['new', 'beta']);
     let repositories = old.repositories;
@@ -838,9 +796,9 @@ describe('VisibilityMappingCoordinator', () => {
     const coordinator = new VisibilityMappingCoordinator({
       filteringRequested: () => true, getCommands, getRepositories: () => repositories,
       topologyReady: () => true, resetNativeVisibility: next.reset, reconciler,
-      topologySettleMilliseconds: 0, commandRetryTimeoutMilliseconds: 10, commandUnavailableRetryMilliseconds: 1000,
+      topologySettleMilliseconds: 0,
     });
-    coordinator.requestRefresh(); await vi.advanceTimersByTimeAsync(10); await coordinator.waitForIdle();
+    coordinator.requestRefresh(); await vi.advanceTimersByTimeAsync(0);
     repositories = next.repositories; coordinator.requestRefresh(); await vi.advanceTimersByTimeAsync(0);
     expect(getCommands).toHaveBeenCalledOnce(); release(old.discoveryCommands); await coordinator.waitForIdle();
     expect(getCommands).toHaveBeenCalledTimes(2);

@@ -1,12 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GitRepository } from '../src/gitApi';
 import {
-  DEFAULT_SELECTION_TIMEOUT_MILLISECONDS,
-  DEFAULT_TOTAL_PROBE_TIMEOUT_MILLISECONDS,
   mapVisibilityCommandsInOrder,
   VisibilityProbeError,
   VisibilityProbeInterruptedError,
-  VisibilityProbeLimitError,
   type VisibilityProbeLedger,
 } from '../src/visibilityBaseline';
 
@@ -62,7 +59,6 @@ function nativeWorld(
 
 const fastTimings = {
   selectionTimeoutMilliseconds: 20,
-  totalTimeoutMilliseconds: 1_000,
 } as const;
 
 describe('mapVisibilityCommandsInOrder', () => {
@@ -72,11 +68,6 @@ describe('mapVisibilityCommandsInOrder', () => {
 
   afterEach(() => {
     vi.useRealTimers();
-  });
-
-  it('uses host-independent probe timeouts', () => {
-    expect(DEFAULT_SELECTION_TIMEOUT_MILLISECONDS).toBe(10_000);
-    expect(DEFAULT_TOTAL_PROBE_TIMEOUT_MILLISECONDS).toBe(120_000);
   });
 
   it.each([-86400000, 86400000])('allows slow focus transfer despite a wall-clock jump (%s)', async jump => {
@@ -216,23 +207,5 @@ describe('mapVisibilityCommandsInOrder', () => {
       { ...fastTimings, isCurrent: () => current },
     )).rejects.toBeInstanceOf(VisibilityProbeInterruptedError);
     expect(world.executed).toEqual(['hide:toggle.scm0']);
-  });
-
-  it('bounds the total time spent waiting for native focus', async () => {
-    const repositories = [repository('alpha', () => false), repository('beta', () => false)];
-    const ledger: VisibilityProbeLedger = {
-      hide: vi.fn(() => Promise.resolve()),
-      reveal: vi.fn(() => Promise.resolve()),
-    };
-    const mapping = mapVisibilityCommandsInOrder(
-      repositories,
-      ['toggle.scm0', 'toggle.scm1'],
-      ledger,
-      { selectionTimeoutMilliseconds: 1_000, totalTimeoutMilliseconds: 20 },
-    );
-    const result = expect(mapping).rejects.toBeInstanceOf(VisibilityProbeLimitError);
-
-    await vi.advanceTimersByTimeAsync(30);
-    await result;
   });
 });

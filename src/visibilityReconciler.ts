@@ -1,6 +1,11 @@
 import type { RepositoryActionability } from './actionability';
 import type { GitRepository } from './gitApi';
-import { waitForSelectedRepository, VisibilityProbeInterruptedError, VisibilityProbeError } from './visibilityBaseline';
+import {
+  DEFAULT_SELECTION_TIMEOUT_MILLISECONDS,
+  waitForSelectedRepository,
+  VisibilityProbeInterruptedError,
+  VisibilityProbeError,
+} from './visibilityBaseline';
 import type { RepositoryIdentity, VisibilityMapping } from './visibilityCommandResolver';
 
 export type ToggleVisibility = (command: string) => Promise<void>;
@@ -77,7 +82,7 @@ export class VisibilityReconciler {
     repositories: readonly GitRepository[],
     selected: GitRepository | undefined,
     isCurrent: () => boolean,
-    selectionTimeoutMilliseconds = 10_000,
+    selectionTimeoutMilliseconds = DEFAULT_SELECTION_TIMEOUT_MILLISECONDS,
   ): Promise<void> {
     const assertCurrent = (): void => {
       if (!isCurrent() || !this.compatible) throw new VisibilityProbeInterruptedError();

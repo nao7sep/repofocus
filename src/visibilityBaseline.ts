@@ -15,13 +15,6 @@ export class VisibilityProbeInterruptedError extends Error {
   }
 }
 
-export class VisibilityProbeLimitError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'VisibilityProbeLimitError';
-  }
-}
-
 export interface VisibilityProbeLedger {
   hide(command: string): Promise<void>;
   reveal(command: string): Promise<void>;
@@ -29,12 +22,15 @@ export interface VisibilityProbeLedger {
 
 export interface VisibilityProbeTimings {
   readonly selectionTimeoutMilliseconds?: number;
-  readonly totalTimeoutMilliseconds?: number;
   readonly isCurrent?: () => boolean;
 }
 
+/**
+ * How long a probe watches for native selection to follow a visibility change.
+ * Selection is how the probe learns which repository a command toggled, so a
+ * command that does not move it is detected only by this observation bound.
+ */
 export const DEFAULT_SELECTION_TIMEOUT_MILLISECONDS = 10_000;
-export const DEFAULT_TOTAL_PROBE_TIMEOUT_MILLISECONDS = 120_000;
 
 function selectedRepository(repositories: readonly GitRepository[]): GitRepository | undefined {
   const selected = repositories.filter(repository => repository.ui.selected);
@@ -82,23 +78,12 @@ export async function mapVisibilityCommandsInOrder(
 
   const selectionTimeoutMilliseconds = timings.selectionTimeoutMilliseconds
     ?? DEFAULT_SELECTION_TIMEOUT_MILLISECONDS;
-  const totalTimeoutMilliseconds = timings.totalTimeoutMilliseconds
-    ?? DEFAULT_TOTAL_PROBE_TIMEOUT_MILLISECONDS;
   if (!Number.isSafeInteger(selectionTimeoutMilliseconds) || selectionTimeoutMilliseconds < 1) {
     throw new Error('Selection timeout must be a positive safe integer.');
   }
-  if (!Number.isSafeInteger(totalTimeoutMilliseconds) || totalTimeoutMilliseconds < 1) {
-    throw new Error('Visibility mapping timeout must be a positive safe integer.');
-  }
 
-  const deadline = performance.now() + totalTimeoutMilliseconds;
   const assertCurrent = (): void => {
     if (timings.isCurrent?.() === false) throw new VisibilityProbeInterruptedError();
-    if (performance.now() >= deadline) {
-      throw new VisibilityProbeLimitError(
-        `Native visibility mapping did not finish within ${totalTimeoutMilliseconds} milliseconds.`,
-      );
-    }
   };
   const mappings = new Array<VisibilityMapping>(repositories.length);
   for (const command of candidateCommands.slice(0, -1)) {
@@ -107,11 +92,7 @@ export async function mapVisibilityCommandsInOrder(
     assertCurrent();
   }
 
-  let current = await waitForSelectedRepository(
-    repositories,
-    Math.min(selectionTimeoutMilliseconds, Math.max(1, deadline - performance.now())),
-    assertCurrent,
-  );
+  let current = await waitForSelectedRepository(repositories, selectionTimeoutMilliseconds, assertCurrent);
   if (!current) throw new VisibilityProbeError('Native repository focus did not settle.');
 
   const seenRepositories = new Set([current.rootUri.toString()]);
@@ -128,7 +109,7 @@ export async function mapVisibilityCommandsInOrder(
     assertCurrent();
     const next = await waitForSelectedRepository(
       repositories,
-      Math.min(selectionTimeoutMilliseconds, Math.max(1, deadline - performance.now())),
+      selectionTimeoutMilliseconds,
       assertCurrent,
       currentKey,
     );

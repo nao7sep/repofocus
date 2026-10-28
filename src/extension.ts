@@ -7,7 +7,6 @@ import { createDiagnostics } from './diagnostics';
 import { FilteringPreference, readStoredFilteringEnabled } from './filteringPreference';
 import type { GitApi, GitExtension, GitRepository } from './gitApi';
 import { GitRepositoryMonitor } from './gitRepositoryMonitor';
-import { OneShotHostOperation, waitForHostOperation } from './hostOperation';
 import { Logger } from './logger';
 import {
   NativeVisibilityCommandExecutor,
@@ -21,9 +20,6 @@ import { VisibilityReconciler } from './visibilityReconciler';
 
 const gitExtensionId = 'vscode.git';
 const filteringStateKey = 'repofocus.filteringEnabledByWorkspace';
-const gitActivationTimeoutMilliseconds = 10_000;
-const hostWriteTimeoutMilliseconds = 10_000;
-const gitActivation = new OneShotHostOperation<GitExtension['exports']>();
 
 export interface RepoFocusExtensionApi {
   readonly git: GitApi;
@@ -36,13 +32,8 @@ export interface RepoFocusExtensionApi {
 async function activateGit(): Promise<GitApi> {
   const extension = vscode.extensions.getExtension<GitExtension['exports']>(gitExtensionId);
   if (!extension) throw new Error('The built-in Git extension is unavailable.');
-  const exports = extension.isActive
-    ? extension.exports
-    : await gitActivation.wait(
-        () => extension.activate(),
-        gitActivationTimeoutMilliseconds,
-        'Built-in Git extension activation',
-      );
+  // VS Code activates an extension once; every later call joins that activation.
+  const exports = extension.isActive ? extension.exports : await extension.activate();
   return exports.getAPI(1);
 }
 
@@ -134,22 +125,9 @@ async function start(
     publishContext: async enabled => {
       await vscode.commands.executeCommand('setContext', 'repofocus.filteringEnabled', enabled);
     },
-    hostWriteTimeoutMilliseconds,
   });
-  await waitForHostOperation(
-    Promise.resolve(vscode.commands.executeCommand('setContext', 'repofocus.compatible', true)),
-    hostWriteTimeoutMilliseconds,
-    'Compatibility context update',
-  );
-  await waitForHostOperation(
-    Promise.resolve(vscode.commands.executeCommand(
-      'setContext',
-      'repofocus.filteringEnabled',
-      initialFilteringEnabled,
-    )),
-    hostWriteTimeoutMilliseconds,
-    'Filtering context update',
-  );
+  await vscode.commands.executeCommand('setContext', 'repofocus.compatible', true);
+  await vscode.commands.executeCommand('setContext', 'repofocus.filteringEnabled', initialFilteringEnabled);
 
   let monitor: GitRepositoryMonitor;
   const visibility = new VisibilityMappingCoordinator({
@@ -310,11 +288,7 @@ async function start(
       alwaysShowPatternCount: alwaysShow.patternCount,
     });
     try {
-      await waitForHostOperation(
-        Promise.resolve(vscode.env.clipboard.writeText(diagnostics)),
-        hostWriteTimeoutMilliseconds,
-        'Diagnostics clipboard write',
-      );
+      await vscode.env.clipboard.writeText(diagnostics);
     } catch (error) {
       logger.error('Copy diagnostics failed.', error);
       void vscode.window.showErrorMessage(describeFailure('copy-diagnostics', error));

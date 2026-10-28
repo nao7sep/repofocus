@@ -1,12 +1,9 @@
-import { waitForHostOperation } from './hostOperation';
-
 export interface FilteringPreferenceOptions {
   readonly initialValue: boolean;
   /** Applies the live preference to native visibility; the reconciler reports its own failures. */
   readonly apply: () => PromiseLike<void>;
   readonly persist: (enabled: boolean) => PromiseLike<void>;
   readonly publishContext: (enabled: boolean) => PromiseLike<void>;
-  readonly hostWriteTimeoutMilliseconds: number;
 }
 
 export interface FilteringToggleResult {
@@ -24,8 +21,8 @@ export function readStoredFilteringEnabled(stored: unknown): boolean {
 
 /**
  * Writes the latest value of one host projection. At most one write is in
- * flight and the next waits for its real settlement, not the caller's
- * timeout, so a slow write can never land after a newer one.
+ * flight and the next waits for it to settle, so a slow write can never land
+ * after a newer one.
  */
 class LatestValueWriter {
   private latest = false;
@@ -52,8 +49,8 @@ class LatestValueWriter {
  * Owns the user's filtering preference, the single authority for whether
  * RepoFocus filters. Native visibility follows it through the reconciler; the
  * stored value and the context key are projections. A projection that fails
- * is reported and never compensated by reverting the preference, because a
- * host write that timed out may still land.
+ * is reported and never compensated by reverting the preference: the user's
+ * newest choice stays in effect for this window.
  */
 export class FilteringPreference {
   private value: boolean;
@@ -74,11 +71,10 @@ export class FilteringPreference {
   async toggle(): Promise<FilteringToggleResult> {
     const enabled = !this.value;
     this.value = enabled;
-    const timeout = this.options.hostWriteTimeoutMilliseconds;
     const [applied, saved, published] = await Promise.allSettled([
       Promise.resolve().then(() => this.options.apply()),
-      waitForHostOperation(this.stored.request(enabled), timeout, 'Filtering preference save'),
-      waitForHostOperation(this.context.request(enabled), timeout, 'Filtering context update'),
+      this.stored.request(enabled),
+      this.context.request(enabled),
     ]);
     if (applied.status === 'rejected') throw applied.reason;
     return {
