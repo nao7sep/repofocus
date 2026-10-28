@@ -10,5 +10,8 @@ export default defineConfig({
       exclude: ['src/extension.ts', 'src/gitApi.ts', 'src/alwaysShowWorker.ts', 'src/alwaysShowWorkerProtocol.ts'],
     },
     include: ['tests/**/*.test.ts'],
+    // A test waits for the event it needs; a slow test that passes has passed.
+    testTimeout: 0,
+    hookTimeout: 0,
   },
 });

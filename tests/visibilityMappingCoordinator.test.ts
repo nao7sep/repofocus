@@ -448,7 +448,10 @@ describe('VisibilityMappingCoordinator', () => {
     const fixture = coordinatorFixture(['alpha', 'beta']);
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
+    let markStarted!: () => void;
+    const started = new Promise<void>(resolve => { markStarted = resolve; });
     const resetNativeVisibility = vi.fn(async () => {
+      markStarted();
       await gate;
       await fixture.native.reset();
     });
@@ -463,7 +466,8 @@ describe('VisibilityMappingCoordinator', () => {
     });
     try {
       coordinator.requestRefresh();
-      await vi.waitFor(() => expect(resetNativeVisibility).toHaveBeenCalledOnce());
+      await started;
+      expect(resetNativeVisibility).toHaveBeenCalledOnce();
       await fixture.native.reset();
       coordinator.acceptForeignReset();
       release();
@@ -484,7 +488,12 @@ describe('VisibilityMappingCoordinator', () => {
 
   it('uses a foreign all-visible reset when it interrupts a probe waiting for focus', async () => {
     const native = nativeRepositories(['alpha', 'beta'], ['alpha', 'beta'], 'beta', 3);
-    const execute = vi.fn(native.execute);
+    let markThirdToggle!: () => void;
+    const thirdToggle = new Promise<void>(resolve => { markThirdToggle = resolve; });
+    const execute = vi.fn(async (command: string) => {
+      await native.execute(command);
+      if (execute.mock.calls.length === 3) markThirdToggle();
+    });
     const onError = vi.fn();
     const reconciler = new VisibilityReconciler({ toggle: execute, resetToAllVisible: native.reset, onError });
     for (const repository of native.repositories) reconciler.setActionability(repository, clean);
@@ -500,7 +509,7 @@ describe('VisibilityMappingCoordinator', () => {
     });
     try {
       coordinator.requestRefresh();
-      await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(3));
+      await thirdToggle;
       await vi.advanceTimersByTimeAsync(0);
       expect(reconciler.toggling).toBe(false);
       await native.reset();
@@ -696,9 +705,11 @@ describe('VisibilityMappingCoordinator', () => {
   it('resets for itself when a toggle was in flight across a foreign return to multiple', async () => {
     const native = nativeRepositories(['alpha', 'beta']);
     let release: (() => void) | undefined;
+    let markHeld!: () => void;
+    const held = new Promise<void>(resolve => { markHeld = resolve; });
     const execute = vi.fn(async (command: string) => {
       if (release === undefined) {
-        await new Promise<void>(resolve => { release = resolve; });
+        await new Promise<void>(resolve => { release = resolve; markHeld(); });
       }
       await native.execute(command);
     });
@@ -718,7 +729,7 @@ describe('VisibilityMappingCoordinator', () => {
     });
 
     coordinator.requestRefresh();
-    await vi.waitFor(() => expect(release).toBeDefined());
+    await held;
     expect(reconciler.toggling).toBe(true);
     coordinator.acceptForeignReset();
     release?.();

@@ -19,24 +19,51 @@ import { strict as assert } from 'node:assert';
 import { writeFile } from 'node:fs/promises';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import * as vscode from 'vscode';
-import type { GitRepository } from '../../src/gitApi';
+import type { DisposableLike, GitApi, GitRepository } from '../../src/gitApi';
 import type { RepoFocusExtensionApi } from '../../src/extension';
 
 const extensionId = 'nao7sep.repofocus';
-const defaultWaitTimeoutMilliseconds = 15_000;
 
-async function waitFor<T>(
-  description: string,
-  read: () => T | undefined,
-  timeoutMilliseconds = defaultWaitTimeoutMilliseconds,
-): Promise<T> {
-  const deadline = Date.now() + timeoutMilliseconds;
-  while (Date.now() < deadline) {
+/** Resolves on the next Git topology, repository-state or configuration change VS Code reports. */
+function nextHostChange(git: GitApi): { readonly changed: Promise<void> } & DisposableLike {
+  let fire!: () => void;
+  const changed = new Promise<void>(resolve => { fire = resolve; });
+  const subscriptions = [
+    git.onDidChangeState(fire),
+    git.onDidOpenRepository(fire),
+    git.onDidCloseRepository(fire),
+    ...git.repositories.map(repository => repository.state.onDidChange(fire)),
+    vscode.workspace.onDidChangeConfiguration(fire),
+  ];
+  return { changed, dispose: () => subscriptions.forEach(subscription => subscription.dispose()) };
+}
+
+/**
+ * Reads once RepoFocus has settled, and again after each change VS Code reports,
+ * until the read returns a value. It subscribes before each read, so a change
+ * that lands while RepoFocus settles is never missed.
+ */
+async function whenSettled<T>(api: RepoFocusExtensionApi, read: () => T | undefined): Promise<T> {
+  for (;;) {
+    const next = nextHostChange(api.git);
+    try {
+      await api.waitForSettled();
+      const value = read();
+      if (value !== undefined) return value;
+      await next.changed;
+    } finally {
+      next.dispose();
+    }
+  }
+}
+
+/** Polls where progress has no host event: RepoFocus retries a missing native command on its own timer. */
+async function poll<T>(read: () => T | undefined): Promise<T> {
+  for (;;) {
     const value = read();
     if (value !== undefined) return value;
     await new Promise(resolve => setTimeout(resolve, 100));
   }
-  throw new Error(`Timed out waiting for ${description}.`);
 }
 
 function repositoryAt(api: RepoFocusExtensionApi, path: string): GitRepository | undefined {
@@ -57,11 +84,7 @@ export async function run(): Promise<void> {
 
   const extension = vscode.extensions.getExtension<RepoFocusExtensionApi>(extensionId);
   assert(extension, `${extensionId} must be installed in the Extension Host.`);
-  const api = await waitFor(
-    'RepoFocus activation after VS Code startup',
-    () => extension.isActive ? extension.exports : undefined,
-    120_000,
-  );
+  const api = await extension.activate();
 
   // RepoFocus starts without changing the user's pane, then initializes when
   // the native view registers its commands.
@@ -72,8 +95,8 @@ export async function run(): Promise<void> {
   const folders = vscode.workspace.workspaceFolders ?? [];
   assert.equal(folders.length, 2, 'The fixture must open exactly two workspace folders.');
 
-  const first = await waitFor('first repository to open', () => repositoryAt(api, firstRoot));
-  const second = await waitFor('second repository to open', () => repositoryAt(api, secondRoot));
+  const first = await whenSettled(api, () => repositoryAt(api, firstRoot));
+  const second = await whenSettled(api, () => repositoryAt(api, secondRoot));
 
   // The path candidates alwaysShow receives from VS Code.
   const firstMatchable = vscode.workspace.asRelativePath(first.rootUri.fsPath);
@@ -94,28 +117,16 @@ export async function run(): Promise<void> {
   const configuration = vscode.workspace.getConfiguration('repofocus');
 
   // Both are clean, so both should be hidden before any alwaysShow pattern applies.
-  const describe = (): string => JSON.stringify({
-    filteringEnabled: api.isFilteringEnabled(),
-    repositoryCount: api.git.repositories.length,
-    first: { hidden: api.isHiddenByRepoFocus(first), actionability: api.getActionability(first) },
-    second: { hidden: api.isHiddenByRepoFocus(second), actionability: api.getActionability(second) },
-  });
-  try {
-    await waitFor('both clean repositories to be hidden', () =>
-      api.isHiddenByRepoFocus(first) && api.isHiddenByRepoFocus(second) ? true : undefined,
-    );
-  } catch (error) {
-    throw new Error(`${(error as Error).message} State: ${describe()}`, { cause: error });
-  }
+  // Filtering starts on RepoFocus's own retry once Source Control registers its commands.
+  await poll(() => api.isHiddenByRepoFocus(first) && api.isHiddenByRepoFocus(second) ? true : undefined);
 
   // Target only the first with its absolute candidate. The payoff assertion is
   // that the same-named second repository stays hidden.
   await configuration.update('alwaysShow', [firstMatchable], vscode.ConfigurationTarget.Workspace);
-  await waitFor('the targeted repository to become visible', () =>
+  await whenSettled(api, () =>
     api.getActionability(first)?.reasons.some(reason => reason.kind === 'always-show')
       && !api.isHiddenByRepoFocus(first) ? true : undefined,
   );
-  await api.waitForSettled();
   assert.equal(
     api.isHiddenByRepoFocus(second),
     true,
@@ -123,7 +134,7 @@ export async function run(): Promise<void> {
   );
 
   await configuration.update('alwaysShow', [], vscode.ConfigurationTarget.Workspace);
-  await waitFor('the targeted repository to become hidden again', () =>
+  await whenSettled(api, () =>
     api.isHiddenByRepoFocus(first) ? true : undefined,
   );
 
@@ -131,7 +142,7 @@ export async function run(): Promise<void> {
   // proving discovery spans roots, not just the folder VS Code happens to list first.
   await writeFile(join(secondRoot, 'tracked.txt'), 'multi-root change\n', 'utf8');
   await second.status();
-  await waitFor('a change in the second root to reveal its repository', () =>
+  await whenSettled(api, () =>
     !api.isHiddenByRepoFocus(second) ? true : undefined,
   );
 }

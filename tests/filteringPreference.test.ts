@@ -88,14 +88,17 @@ describe('FilteringPreference', () => {
   it('never lets a late write land after a newer preference', async () => {
     const firstWrite = deferred();
     const stored: boolean[] = [];
+    const firstWriteStarted = deferred();
     const persist = vi.fn((value: boolean) => {
+      if (persist.mock.calls.length === 1) firstWriteStarted.resolve();
       const write = persist.mock.calls.length === 1 ? firstWrite.promise : Promise.resolve();
       return write.then(() => { stored.push(value); });
     });
     const state = preference({ persist });
 
     const first = state.toggle();
-    await vi.waitFor(() => expect(persist.mock.calls).toEqual([[false]]));
+    await firstWriteStarted.promise;
+    expect(persist.mock.calls).toEqual([[false]]);
     const second = state.toggle();
     await Promise.resolve();
     expect(persist).toHaveBeenCalledOnce();

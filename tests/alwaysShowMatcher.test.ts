@@ -203,8 +203,8 @@ describe('real bundled always-show worker', () => {
     owner.evaluate('slow', path, failed);
     owner.evaluate('other', 'ordinary', vi.fn());
     await started;
-    // This timer runs in the calling thread while the regex occupies the worker.
-    await new Promise(resolve => setTimeout(resolve, 10));
+    // This callback runs in the calling thread while the regex occupies the worker.
+    await new Promise(resolve => setImmediate(resolve));
     expect(failed).not.toHaveBeenCalled();
     await owner.waitForIdle();
     const result = owner.evaluate('slow', path, failed);
