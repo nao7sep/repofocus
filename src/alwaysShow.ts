@@ -1,8 +1,5 @@
 import { Minimatch } from 'minimatch';
 
-export const MAX_ALWAYS_SHOW_PATTERNS = 100;
-export const MAX_ALWAYS_SHOW_PATTERN_LENGTH = 512;
-
 function normalize(value: string): string {
   return value.replaceAll('\\', '/').replace(/^\.\//, '').replace(/\/$/, '');
 }
@@ -48,12 +45,7 @@ export function validateAlwaysShowPatterns(value: unknown): AlwaysShowPatterns {
     return { patternCount: 0, patterns: [], valid: false };
   }
   const patterns = value as readonly unknown[];
-  if (
-    patterns.length > MAX_ALWAYS_SHOW_PATTERNS
-    || patterns.some(pattern => (
-      typeof pattern !== 'string' || pattern.length > MAX_ALWAYS_SHOW_PATTERN_LENGTH
-    ))
-  ) {
+  if (patterns.some(pattern => typeof pattern !== 'string')) {
     // Settings normally reject this shape, but a hand-edited or synced value can
     // bypass validation; it is never compiled.
     return { patternCount: patterns.length, patterns: [], valid: false };

@@ -95,10 +95,8 @@
           "type": "array",
           "default": [],
           "scope": "window",
-          "maxItems": 100,
           "items": {
-            "type": "string",
-            "maxLength": 512
+            "type": "string"
           },
           "description": "Git repository glob patterns that remain visible even when clean. A pattern matches a repository's path (workspace-relative where it has one) or its directory name, so a bare name such as 'my-repo' works in any workspace shape."
         }
